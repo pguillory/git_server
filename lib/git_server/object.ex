@@ -42,32 +42,45 @@ defmodule GitServer.Object do
   its type: a directory is a tree, a file or symlink a blob, and a gitlink (a
   submodule commit, mode `160000`) is left out because it lives in another
   repository. A tag points to its object with the type the tag declares. A blob points
-  to nothing. Returns `{:error, reason}` when the content is malformed.
+  to nothing. Returns `{:error, reason}` when the content is malformed, or when it has
+  more than `max` links, which is checked as they're parsed. Each id is copied out of
+  `content`, so the links don't keep it alive.
   """
-  @spec parse_links(type, binary) :: {:ok, [link]} | {:error, String.t()}
-  def parse_links(:blob, _content), do: {:ok, []}
+  @spec parse_links(type, binary, non_neg_integer | :infinity) ::
+          {:ok, [link]} | {:error, String.t()}
+  def parse_links(type, content, max \\ :infinity)
 
-  def parse_links(:commit, content) do
+  def parse_links(:blob, _content, _max), do: {:ok, []}
+
+  def parse_links(:commit, content, max) do
     with {:ok, tree, rest} <- header_id(content, "tree"),
-         {:ok, parents} <- parents(rest, []) do
+         :ok <- room(1, max),
+         {:ok, parents} <- parents(rest, [], 1, max) do
       {:ok, [{:tree, tree} | Enum.map(parents, &{:commit, &1})]}
     else
+      :too_many -> {:error, "too many links"}
       _ -> {:error, "malformed commit"}
     end
   end
 
-  def parse_links(:tag, content) do
+  def parse_links(:tag, content, max) do
     with {:ok, target, rest} <- header_id(content, "object"),
+         :ok <- room(1, max),
          [type_line, _] <- :binary.split(rest, "\n"),
          "type " <> name <- type_line,
          {:ok, type} <- parse_type(name) do
       {:ok, [{type, target}]}
     else
+      :too_many -> {:error, "too many links"}
       _ -> {:error, "malformed tag"}
     end
   end
 
-  def parse_links(:tree, content), do: tree_links(content, [])
+  def parse_links(:tree, content, max), do: tree_links(content, [], 0, max)
+
+  # Whether `n` links fit within `max`.
+  defp room(n, max) when n <= max, do: :ok
+  defp room(_n, _max), do: :too_many
 
   defp header_id(content, field) do
     hex_size = ObjectId.size() * 2
@@ -82,18 +95,19 @@ defmodule GitServer.Object do
     end
   end
 
-  defp parents("parent " <> _ = content, acc) do
+  defp parents("parent " <> _ = content, acc, n, max) do
     case header_id(content, "parent") do
-      {:ok, id, rest} -> parents(rest, [id | acc])
+      {:ok, _id, _rest} when n >= max -> :too_many
+      {:ok, id, rest} -> parents(rest, [id | acc], n + 1, max)
       :error -> :error
     end
   end
 
-  defp parents(_content, acc), do: {:ok, Enum.reverse(acc)}
+  defp parents(_content, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
 
-  defp tree_links(<<>>, acc), do: {:ok, Enum.reverse(acc)}
+  defp tree_links(<<>>, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
 
-  defp tree_links(content, acc) do
+  defp tree_links(content, acc, n, max) do
     id_size = ObjectId.size()
 
     with [mode, rest] <- :binary.split(content, " "),
@@ -101,8 +115,9 @@ defmodule GitServer.Object do
          [name, <<id::binary-size(id_size), rest::binary>>] when name != "" <-
            :binary.split(rest, <<0>>) do
       case kind do
-        :gitlink -> tree_links(rest, acc)
-        type -> tree_links(rest, [{type, id} | acc])
+        :gitlink -> tree_links(rest, acc, n, max)
+        _type when n >= max -> {:error, "too many links"}
+        type -> tree_links(rest, [{type, :binary.copy(id)} | acc], n + 1, max)
       end
     else
       _ -> {:error, "malformed tree"}
