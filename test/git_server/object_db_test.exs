@@ -186,6 +186,25 @@ defmodule GitServer.ObjectDBTest do
              {:error, "malformed tag"}
 
     assert Object.parse_links(:tree, "100644 name\0short") == {:error, "malformed tree"}
+    entry = "100644 x\0" <> :binary.copy(<<1>>, 20)
+    assert {:ok, [_, _]} = Object.parse_links(:tree, entry <> entry, 2)
+    assert Object.parse_links(:tree, entry <> entry <> entry, 2) == {:error, "too many links"}
+    gitlink = "160000 g\0" <> :binary.copy(<<2>>, 20)
+    assert Object.parse_links(:tree, gitlink, 0) == {:ok, []}
+    assert {:ok, [_, _]} = Object.parse_links(:tree, entry <> entry <> gitlink, 2)
+    root = "tree #{String.duplicate("a", 40)}\nauthor x\n"
+    assert Object.parse_links(:commit, root, 0) == {:error, "too many links"}
+    assert {:ok, [_]} = Object.parse_links(:commit, root, 1)
+    tag = "object #{String.duplicate("a", 40)}\ntype commit\ntag v\n"
+    assert Object.parse_links(:tag, tag, 0) == {:error, "too many links"}
+    assert {:ok, [_]} = Object.parse_links(:tag, tag, 1)
+    parent = "parent #{String.duplicate("b", 40)}\n"
+
+    assert Object.parse_links(
+             :commit,
+             "tree #{String.duplicate("a", 40)}\n" <> parent <> parent,
+             2
+           ) == {:error, "too many links"}
 
     assert Object.parse_links(:tree, "100644 \0" <> :binary.copy(<<1>>, 20)) ==
              {:error, "malformed tree"}

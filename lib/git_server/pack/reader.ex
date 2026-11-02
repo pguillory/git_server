@@ -19,7 +19,21 @@ defmodule GitServer.Pack.Reader do
   @max_header 40
 
   @enforce_keys [:fd, :ends, :ref, :cache, :max_object_bytes, :max_delta_depth]
-  defstruct [:key | @enforce_keys]
+  defstruct [:key, :budget | @enforce_keys]
+
+  @doc false
+  # A budget of bytes inflated and produced by deltas, shared by everything that
+  # charges it. `nil` means unlimited.
+  def new_budget(max), do: {:counters.new(1, []), max}
+
+  @doc false
+  def charge(nil, _bytes), do: :ok
+
+  def charge({ref, max}, bytes) do
+    :counters.add(ref, 1, bytes)
+    if :counters.get(ref, 1) > max, do: fail("pack needs too much work to index")
+    :ok
+  end
 
   @doc "Parses the entry header at `offset`."
   def entry(%__MODULE__{} = r, offset) do
@@ -107,6 +121,7 @@ defmodule GitServer.Pack.Reader do
       Enum.reduce(deltas, {type, content, depth}, fn e, {type, base, depth} ->
         case Delta.apply(base, inflate(r, e), r.max_object_bytes) do
           {:ok, result} ->
+            charge(r.budget, byte_size(result))
             Cache.put(r.cache, {r.key, e.offset}, {type, result, depth + 1}, byte_size(result))
             {type, result, depth + 1}
 
@@ -123,6 +138,9 @@ defmodule GitServer.Pack.Reader do
   its declared size.
   """
   def inflate(%__MODULE__{} = r, e) do
+    # zlib's work follows its input as well as its output (empty stored blocks).
+    charge(r.budget, max(e.size, e.stop - e.start))
+
     with_inflater(fn z ->
       out = inflate_range(r.fd, z, e.start, e.stop, e.size, 0, [])
       :zlib.inflateEnd(z)
