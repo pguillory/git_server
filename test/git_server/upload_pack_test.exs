@@ -163,6 +163,47 @@ defmodule GitServer.UploadPackTest do
       assert git(["ls-remote", "--heads", url]) == {"#{commit}\trefs/heads/main\n", 0}
     end
 
+    test "a request too big for one POST, probed first", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      Seed.commit!(source, "file", "one\n")
+      {_, 0} = git(["tag", "base"], cd: source.repo)
+
+      # One want each: more bytes than this http.postBuffer, near the smallest git allows.
+      commits = for i <- 1..1500, do: commit_stream(i)
+      input = Path.join(tmp_dir, "fast-import")
+      File.write!(input, commits)
+      GitServer.LocalGit.git!(source.home, source.repo, ["fast-import", "--quiet"], input: input)
+
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      clone = Path.join(tmp_dir, "clone")
+
+      assert {_, 0} =
+               git([
+                 "-c",
+                 "http.postBuffer=65600",
+                 "clone",
+                 "-q",
+                 TestServer.url(server, "repo"),
+                 clone,
+               ])
+
+      assert rev_parse!(clone, "origin/b1500") == Seed.rev_parse!(source, "b1500")
+    end
+
+    defp commit_stream(i) do
+      message = "branch #{i}"
+
+      """
+      commit refs/heads/b#{i}
+      committer Test User <test@example.com> 1700000000 +0000
+      data #{byte_size(message)}
+      #{message}
+      from refs/tags/base
+
+      """
+    end
+
     test "many haves arrive gzipped, over several rounds", %{tmp_dir: tmp_dir} do
       source = Seed.source!(tmp_dir)
       first = Seed.commit!(source, "file", "one\n")

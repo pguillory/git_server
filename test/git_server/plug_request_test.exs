@@ -183,6 +183,9 @@ defmodule GitServer.PlugRequestTest do
     conn = call(post("/repo/git-upload-pack", "0000"), opts)
     assert {conn.status, conn.resp_body} == {200, ""}
 
+    conn = GitServer.Plug.call(post("/repo/git-upload-pack", "0000"), opts)
+    assert {conn.status, conn.resp_body} == {200, ""}
+
     conn = GitServer.Plug.call(post("/repo/git-upload-pack", ls_refs_body()), opts)
     assert conn.status == 400
 

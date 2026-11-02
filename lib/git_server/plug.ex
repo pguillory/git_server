@@ -170,15 +170,19 @@ defmodule GitServer.Plug do
   end
 
   defp serve(conn, config, repo, :upload_pack) do
-    if protocol_v2?(conn) do
-      # A body of just a flush is git's probe before a large request.
-      case Body.read(conn, config.max_request_bytes) do
-        {:ok, "0000", conn} -> result(conn, "git-upload-pack", [])
-        {:ok, body, conn} -> UploadPack.command(conn, config, repo, body)
-        {:error, reason, conn} -> body_error(conn, reason)
-      end
-    else
-      needs_v2(conn)
+    # A body of just a flush is git's probe before a large request, which git sends
+    # without its Git-Protocol header.
+    case Body.read(conn, config.max_request_bytes) do
+      {:ok, "0000", conn} ->
+        result(conn, "git-upload-pack", [])
+
+      {:ok, body, conn} ->
+        if protocol_v2?(conn),
+          do: UploadPack.command(conn, config, repo, body),
+          else: needs_v2(conn)
+
+      {:error, reason, conn} ->
+        body_error(conn, reason)
     end
   end
 
