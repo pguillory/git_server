@@ -1,0 +1,36 @@
+#!/bin/bash
+# Runs the demo server (dev/demo.exs) with repositories under demo/ in a bucket.
+#
+#   bin/demo                 MinIO on loopback, started if needed (bin/test-s3-local)
+#   bin/demo SETTINGS_FILE   the bucket in a file of GIT_SERVER_TEST_S3_* lines
+#
+# GIT_SERVER_DEMO_PORT and GIT_SERVER_DEMO_PASSWORD pass through to the server.
+set -euo pipefail
+settings_file="${1:-}"
+
+if [[ -n "$settings_file" ]]; then
+  settings_dir=$(cd "$(dirname "$settings_file")" && pwd)
+  settings_file=$settings_dir/$(basename "$settings_file")
+fi
+
+cd "$(dirname "$0")/.."
+
+if [[ -z "$settings_file" ]]; then
+  bin/test-s3-local start
+  settings_file=tmp/test-s3.env
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "$settings_file"
+set +a
+
+export GIT_SERVER_S3_ENDPOINT="$GIT_SERVER_TEST_S3_ENDPOINT"
+export GIT_SERVER_S3_BUCKET="$GIT_SERVER_TEST_S3_BUCKET"
+export GIT_SERVER_S3_REGION="$GIT_SERVER_TEST_S3_REGION"
+export GIT_SERVER_S3_ACCESS_KEY_ID="$GIT_SERVER_TEST_S3_ACCESS_KEY_ID"
+export GIT_SERVER_S3_SECRET_ACCESS_KEY="$GIT_SERVER_TEST_S3_SECRET_ACCESS_KEY"
+export GIT_SERVER_S3_PREFIX=demo/
+
+mix deps.get
+exec mix run --no-halt dev/demo.exs

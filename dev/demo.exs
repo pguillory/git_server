@@ -2,6 +2,8 @@
 #
 #     mix run --no-halt dev/demo.exs
 #
+# bin/demo runs this with the settings filled in, for MinIO or a settings file.
+#
 # Settings: GIT_SERVER_S3_ENDPOINT, GIT_SERVER_S3_BUCKET, GIT_SERVER_S3_REGION,
 # GIT_SERVER_S3_ACCESS_KEY_ID, GIT_SERVER_S3_SECRET_ACCESS_KEY, and optionally
 # GIT_SERVER_S3_PREFIX (ending in /). Any username works with the password in
@@ -50,14 +52,27 @@ end
 
 port = String.to_integer(System.get_env("GIT_SERVER_DEMO_PORT") || "4000")
 
-{:ok, _pid} =
-  Bandit.start_link(
-    plug: {GitServer.Plug, store: store, authorize: authorize},
-    scheme: :http,
-    ip: {127, 0, 0, 1},
-    port: port,
-    startup_log: false
-  )
+# Trapped only while starting, so a port in use is a sentence rather than a crash.
+Process.flag(:trap_exit, true)
+
+case Bandit.start_link(
+       plug: {GitServer.Plug, store: store, authorize: authorize},
+       scheme: :http,
+       ip: {127, 0, 0, 1},
+       port: port,
+       startup_log: false
+     ) do
+  {:ok, _pid} ->
+    Process.flag(:trap_exit, false)
+
+  {:error, reason} ->
+    IO.puts(
+      :stderr,
+      "demo: cannot serve on 127.0.0.1:#{port} (#{inspect(reason)}); GIT_SERVER_DEMO_PORT picks another port"
+    )
+
+    System.halt(1)
+end
 
 Logger.info("demo: serving on http://127.0.0.1:#{port} from #{GitServer.Store.describe(store)}")
 

@@ -62,5 +62,9 @@ stops it. To use a real bucket instead, set `GIT_SERVER_TEST_S3_ENDPOINT`, `_BUC
 `_REGION`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`. Each run works under a fresh
 `test-<random>/` prefix and deletes it at the end.
 
+`bin/demo` runs the demo server (`dev/demo.exs`) against MinIO on loopback, or against
+the bucket in a settings file of `GIT_SERVER_TEST_S3_*` lines; the README has the
+sequence to try it with.
+
 Before every push, run `bin/hygiene-scan` (optionally with a private term list kept
 outside the repository) and read every hit.
