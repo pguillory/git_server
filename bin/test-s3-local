@@ -1,0 +1,79 @@
+#!/bin/bash
+# Runs MinIO on loopback for the tests: `bin/test-s3-local start` or `bin/test-s3-local stop`.
+#
+# start: launches `minio server` on 127.0.0.1 only (both the API and the console, so
+# macOS never asks about network access), with random throwaway root credentials and
+# its data under tmp/minio/, creates the test bucket, and writes the
+# GIT_SERVER_TEST_S3_* settings to tmp/test-s3.env, which test/test_helper.exs reads
+# when those variables are not already set. Starting again while it runs is a no-op.
+# stop: kills the recorded MinIO process (only that PID) and removes tmp/minio/.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+dir=tmp/minio
+pid_file=tmp/minio.pid
+env_file=tmp/test-s3.env
+
+running() {
+  [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null
+}
+
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+case "${1:-}" in
+  start)
+    if running; then
+      exit 0
+    fi
+
+    command -v minio >/dev/null || { echo "minio is not installed (brew install minio)" >&2; exit 1; }
+    rm -rf "$dir"
+    mkdir -p "$dir/data"
+    port=$(free_port)
+    console_port=$(free_port)
+    user="test$(openssl rand -hex 8)"
+    password=$(openssl rand -hex 20)
+    bucket=git-server-local
+    endpoint="http://127.0.0.1:$port"
+
+    MINIO_ROOT_USER="$user" MINIO_ROOT_PASSWORD="$password" MINIO_BROWSER=off \
+      MINIO_UPDATE=off MINIO_CI_CD=1 \
+      nohup minio server "$dir/data" --quiet --address "127.0.0.1:$port" \
+      --console-address "127.0.0.1:$console_port" >"$dir/minio.log" 2>&1 &
+    echo $! >"$pid_file"
+
+    for _ in $(seq 1 100); do
+      if curl -fs "$endpoint/minio/health/live" >/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+
+    curl -fsS -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user "$user:$password" \
+      "$endpoint/$bucket" >/dev/null
+
+    umask 077
+    cat >"$env_file" <<ENV
+GIT_SERVER_TEST_S3_ENDPOINT=$endpoint
+GIT_SERVER_TEST_S3_BUCKET=$bucket
+GIT_SERVER_TEST_S3_REGION=us-east-1
+GIT_SERVER_TEST_S3_ACCESS_KEY_ID=$user
+GIT_SERVER_TEST_S3_SECRET_ACCESS_KEY=$password
+ENV
+    ;;
+
+  stop)
+    if running; then
+      kill "$(cat "$pid_file")"
+    fi
+    rm -f "$pid_file" "$env_file"
+    rm -rf "$dir"
+    ;;
+
+  *)
+    echo "usage: $0 start|stop" >&2
+    exit 2
+    ;;
+esac

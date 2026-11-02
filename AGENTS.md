@@ -32,3 +32,28 @@ supplies the store configuration and an `authorize` callback, and holds every se
 - Generic mechanisms belong in generic layers: conditional writes live in the store,
   not in the refs code.
 - Never log credentials, Authorization headers, or S3 response bodies and headers.
+
+## Modules
+
+- `GitServer.Plug`: routing, request-time config (`GitServer.Config`), HTTP Basic
+  credentials and the host's `authorize` callback, the info/refs advertisements, and
+  dispatch of upload-pack (v2) and receive-pack (v0) requests.
+- `GitServer.PktLine`: pkt-line and side-band framing. `GitServer.Body`: capped,
+  gzip-aware request body reading, whole or streamed to a file.
+- `GitServer.RepoName`: repository names from the request path.
+- `GitServer.State`: the text codec of a repository's `state` object (HEAD, refs,
+  pack list). `GitServer.Repository`: the store layout, state reads, the conditional
+  state write, and snapshots (the listed packs downloaded to a temp directory).
+- `GitServer.Store`: the store behaviour (`get`, `get_file`, `put`, `put_file` with a
+  condition, `delete`, `list`). `GitServer.Store.S3` is its implementation.
+
+## Tests
+
+Start MinIO on loopback once with `bin/test-s3-local start` (it writes
+`tmp/test-s3.env`, which the tests read), then `mix test`. `bin/test-s3-local stop`
+stops it. To use a real bucket instead, set `GIT_SERVER_TEST_S3_ENDPOINT`, `_BUCKET`,
+`_REGION`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`. Each run works under a fresh
+`test-<random>/` prefix and deletes it at the end.
+
+Before every push, run `bin/hygiene-scan` (optionally with a private term list kept
+outside the repository) and read every hit.
