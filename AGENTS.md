@@ -36,7 +36,7 @@ supplies the store configuration and an `authorize` callback, and holds every se
 ## Modules
 
 - `GitServer.Plug`: routing, request-time config (`GitServer.Config`), HTTP Basic
-  credentials and the host's `authorize` callback, the info/refs advertisements, and
+  credentials and the host's `authorize` callback, the upload-pack advertisement, and
   dispatch of upload-pack (v2) and receive-pack (v0) requests.
 - `GitServer.PktLine`: pkt-line and side-band framing. `GitServer.Body`: capped,
   gzip-aware request body reading, whole or streamed to a file.
@@ -44,6 +44,10 @@ supplies the store configuration and an `authorize` callback, and holds every se
 - `GitServer.State`: the text codec of a repository's `state` object (HEAD, refs,
   pack list). `GitServer.Repository`: the store layout, state reads, the conditional
   state write, and snapshots (the listed packs downloaded to a temp directory).
+- `GitServer.ReceivePack`: push, the receive-pack advertisement and request: commands,
+  the pack indexed and checked against the state, the pack stored, then the
+  conditional state write retried while other pushes win. `GitServer.RefName`: the
+  ref names a push may update.
 - `GitServer.Store`: the store behaviour (`get`, `get_file`, `put`, `put_file` with a
   condition, `delete`, `list`). `GitServer.Store.S3` is its implementation.
 

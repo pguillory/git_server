@@ -71,7 +71,7 @@ defmodule GitServer.Repository do
   again on error; on success the caller deletes it with `release/1`.
   """
   def snapshot(store, repo, temp_dir) do
-    with {:ok, dir} <- make_dir(temp_dir) do
+    with {:ok, dir} <- private_dir(temp_dir) do
       result =
         try do
           with {:ok, state, etag} <- read_state(store, repo) do
@@ -163,8 +163,12 @@ defmodule GitServer.Repository do
     end
   end
 
-  # An exclusive directory with a random name, unrelated to the repository's name.
-  defp make_dir(temp_dir) do
+  @doc """
+  Creates an exclusive directory under `temp_dir`, with a random name unrelated to
+  any repository's and readable only by this user: `{:ok, dir}` or
+  `{:error, reason}`. The caller removes it.
+  """
+  def private_dir(temp_dir) do
     dir =
       Path.join(
         temp_dir,

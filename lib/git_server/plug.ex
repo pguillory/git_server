@@ -15,8 +15,8 @@ defmodule GitServer.Plug do
   - `POST <repo>/git-upload-pack`: v2 commands, `ls-refs` and `fetch` (`fetch`
     answers "not implemented yet" for now).
   - `GET <repo>/info/refs?service=git-receive-pack` and
-    `POST <repo>/git-receive-pack`: push, over protocol v0 (the POST answers
-    HTTP 501, not implemented yet, for now).
+    `POST <repo>/git-receive-pack`: push, over protocol v0 (see
+    `GitServer.ReceivePack`).
 
   Anything else is 404.
 
@@ -39,9 +39,7 @@ defmodule GitServer.Plug do
 
   import Plug.Conn
   require Logger
-  alias GitServer.{Body, Config, PktLine, RepoName, Repository}
-
-  @zero_id String.duplicate("0", 40)
+  alias GitServer.{Body, Config, PktLine, RepoName, ReceivePack, Repository}
 
   @impl true
   def init(opts) do
@@ -141,32 +139,8 @@ defmodule GitServer.Plug do
     end
   end
 
-  # The capabilities ride on the first ref line; an empty repository advertises
-  # them on a placeholder `capabilities^{}` with the zero id.
   defp serve(conn, config, repo, :receive_pack_refs) do
-    case Repository.read_state(config.store, repo) do
-      {:ok, state, _etag} ->
-        capabilities =
-          "report-status delete-refs side-band-64k quiet atomic ofs-delta no-thin " <>
-            "agent=#{agent()} object-format=sha1"
-
-        [{first_name, first_id} | rest] =
-          case Enum.sort(state.refs) do
-            [] -> [{"capabilities^{}", @zero_id}]
-            refs -> refs
-          end
-
-        advertise(conn, "git-receive-pack", [
-          PktLine.encode("# service=git-receive-pack\n"),
-          PktLine.flush(),
-          PktLine.encode("#{first_id} #{first_name}\0#{capabilities}\n"),
-          Enum.map(rest, fn {name, id} -> PktLine.encode("#{id} #{name}\n") end),
-          PktLine.flush(),
-        ])
-
-      {:error, reason} ->
-        store_error(conn, reason)
-    end
+    ReceivePack.advertise(conn, config, repo)
   end
 
   defp serve(conn, config, repo, :upload_pack) do
@@ -182,8 +156,8 @@ defmodule GitServer.Plug do
     end
   end
 
-  defp serve(conn, _config, _repo, :receive_pack) do
-    text(conn, 501, "git_server: push is not implemented yet")
+  defp serve(conn, config, repo, :receive_pack) do
+    ReceivePack.push(conn, config, repo)
   end
 
   # A v2 request: command=<name>, capabilities, a delim, arguments, a flush.
@@ -317,43 +291,49 @@ defmodule GitServer.Plug do
     )
   end
 
-  defp advertise(conn, service, body) do
+  @doc false
+  def advertise(conn, service, body) do
     conn
     |> put_resp_content_type("application/x-#{service}-advertisement", nil)
     |> put_resp_header("cache-control", "no-cache")
     |> send_resp(200, body)
   end
 
-  defp result(conn, service, body) do
+  @doc false
+  def result(conn, service, body) do
     conn
     |> put_resp_content_type("application/x-#{service}-result", nil)
     |> put_resp_header("cache-control", "no-cache")
     |> send_resp(200, body)
   end
 
-  defp body_error(conn, :too_large), do: text(conn, 413, "Request body too large")
-  defp body_error(conn, :bad_gzip), do: text(conn, 400, "Malformed gzip request body")
+  @doc false
+  def body_error(conn, :too_large), do: text(conn, 413, "Request body too large")
+  def body_error(conn, :bad_gzip), do: text(conn, 400, "Malformed gzip request body")
 
-  defp body_error(conn, :unsupported_encoding),
+  def body_error(conn, :unsupported_encoding),
     do: text(conn, 415, "Unsupported Content-Encoding")
 
-  defp body_error(conn, _reason), do: text(conn, 400, "Could not read the request body")
+  def body_error(conn, _reason), do: text(conn, 400, "Could not read the request body")
 
   # Store messages hold no secrets, but stay out of the response all the same.
-  defp store_error(conn, reason) do
+  @doc false
+  def store_error(conn, reason) do
     Logger.error("git_server: store error: #{inspect(reason)}")
     text(conn, 500, "Storage error")
   end
 
   # Git shows a text/plain error body to the user as `remote: ...` lines.
-  defp text(conn, status, message) do
+  @doc false
+  def text(conn, status, message) do
     conn
     |> put_resp_content_type("text/plain")
     |> put_resp_header("cache-control", "no-cache")
     |> send_resp(status, message <> "\n")
   end
 
-  defp agent do
+  @doc false
+  def agent do
     "git_server/#{GitServer.version()}"
   end
 end

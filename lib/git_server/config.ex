@@ -11,6 +11,8 @@ defmodule GitServer.Config do
   - `:max_request_bytes`: the largest upload-pack request body, raw and inflated
     (default 10 MB).
   - `:max_command_bytes`: the largest command section of a push (default 1 MB).
+  - `:push_deadline_ms`: how long a push keeps retrying its state write while other
+    pushes to the same repository win the race (default 15 seconds).
   """
 
   @enforce_keys [:store, :authorize, :temp_dir]
@@ -22,6 +24,7 @@ defmodule GitServer.Config do
     max_object_bytes: 50_000_000,
     max_request_bytes: 10_000_000,
     max_command_bytes: 1_000_000,
+    push_deadline_ms: 15_000,
   ]
 
   @doc """

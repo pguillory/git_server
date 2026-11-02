@@ -275,8 +275,4 @@ defmodule GitServer.PlugRequestTest do
                if(status == 401, do: [~s(Basic realm="git")], else: [])
     end
   end
-
-  test "push is not implemented yet", %{opts: opts} do
-    assert call(post("/repo/git-receive-pack", "0000"), opts).status == 501
-  end
 end
