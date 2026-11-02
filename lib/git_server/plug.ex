@@ -12,8 +12,8 @@ defmodule GitServer.Plug do
   - `GET <repo>/info/refs?service=git-upload-pack`: the protocol v2 capability
     advertisement. Fetching needs protocol v2 (git's default since 2.26); a client
     asking for v0 gets HTTP 400 saying so.
-  - `POST <repo>/git-upload-pack`: v2 commands, `ls-refs` and `fetch` (`fetch`
-    answers "not implemented yet" for now).
+  - `POST <repo>/git-upload-pack`: v2 commands, `ls-refs` and `fetch` (see
+    `GitServer.UploadPack`).
   - `GET <repo>/info/refs?service=git-receive-pack` and
     `POST <repo>/git-receive-pack`: push, over protocol v0 (see
     `GitServer.ReceivePack`).
@@ -39,7 +39,7 @@ defmodule GitServer.Plug do
 
   import Plug.Conn
   require Logger
-  alias GitServer.{Body, Config, PktLine, RepoName, ReceivePack, Repository}
+  alias GitServer.{Body, Config, PktLine, RepoName, ReceivePack, UploadPack}
 
   @impl true
   def init(opts) do
@@ -144,135 +144,24 @@ defmodule GitServer.Plug do
   end
 
   defp serve(conn, config, repo, :upload_pack) do
-    if protocol_v2?(conn) do
-      # A body of just a flush is git's probe before a large request.
-      case Body.read(conn, config.max_request_bytes) do
-        {:ok, "0000", conn} -> result(conn, "git-upload-pack", [])
-        {:ok, body, conn} -> upload_pack_command(conn, config, repo, body)
-        {:error, reason, conn} -> body_error(conn, reason)
-      end
-    else
-      needs_v2(conn)
+    # A body of just a flush is git's probe before a large request, which git sends
+    # without its Git-Protocol header.
+    case Body.read(conn, config.max_request_bytes) do
+      {:ok, "0000", conn} ->
+        result(conn, "git-upload-pack", [])
+
+      {:ok, body, conn} ->
+        if protocol_v2?(conn),
+          do: UploadPack.command(conn, config, repo, body),
+          else: needs_v2(conn)
+
+      {:error, reason, conn} ->
+        body_error(conn, reason)
     end
   end
 
   defp serve(conn, config, repo, :receive_pack) do
     ReceivePack.push(conn, config, repo)
-  end
-
-  # A v2 request: command=<name>, capabilities, a delim, arguments, a flush.
-  defp upload_pack_command(conn, config, repo, body) do
-    with {:ok, packets} <- PktLine.decode(body),
-         {:ok, command, capabilities, arguments} <- split_command(packets),
-         :ok <- check_capabilities(capabilities) do
-      case command do
-        "ls-refs" ->
-          ls_refs(conn, config, repo, arguments)
-
-        "fetch" ->
-          result(
-            conn,
-            "git-upload-pack",
-            PktLine.error("git_server: fetch is not implemented yet")
-          )
-
-        other ->
-          result(conn, "git-upload-pack", PktLine.error("unknown command #{inspect(other)}"))
-      end
-    else
-      {:error, reason} -> result(conn, "git-upload-pack", PktLine.error(reason))
-    end
-  end
-
-  defp split_command(["command=" <> command | rest]) do
-    {capabilities, rest} = Enum.split_while(rest, &is_binary/1)
-
-    case rest do
-      [:flush] ->
-        {:ok, PktLine.chomp(command), Enum.map(capabilities, &PktLine.chomp/1), []}
-
-      [:delim | rest] ->
-        case Enum.split_while(rest, &is_binary/1) do
-          {arguments, [:flush]} ->
-            {:ok, PktLine.chomp(command), Enum.map(capabilities, &PktLine.chomp/1),
-             Enum.map(arguments, &PktLine.chomp/1)}
-
-          _ ->
-            {:error, "malformed request"}
-        end
-
-      _ ->
-        {:error, "malformed request"}
-    end
-  end
-
-  defp split_command(_packets) do
-    {:error, "malformed request"}
-  end
-
-  defp check_capabilities(capabilities) do
-    Enum.reduce_while(capabilities, :ok, fn
-      "agent=" <> _, :ok -> {:cont, :ok}
-      "object-format=sha1", :ok -> {:cont, :ok}
-      "object-format=" <> format, :ok -> {:halt, {:error, "unsupported object-format #{format}"}}
-      other, :ok -> {:halt, {:error, "unsupported capability #{inspect(other)}"}}
-    end)
-  end
-
-  defp ls_refs(conn, config, repo, arguments) do
-    with {:ok, options} <- ls_refs_options(arguments),
-         {:ok, state, _etag} <- Repository.read_state(config.store, repo) do
-      wanted? = fn name ->
-        options.prefixes == [] or Enum.any?(options.prefixes, &String.starts_with?(name, &1))
-      end
-
-      symref = if options.symrefs, do: " symref-target:#{state.head}", else: ""
-
-      head =
-        cond do
-          not wanted?.("HEAD") -> []
-          id = state.refs[state.head] -> [PktLine.encode("#{id} HEAD#{symref}\n")]
-          options.unborn -> [PktLine.encode("unborn HEAD#{symref}\n")]
-          true -> []
-        end
-
-      refs =
-        for {name, id} <- Enum.sort(state.refs), wanted?.(name) do
-          PktLine.encode("#{id} #{name}\n")
-        end
-
-      result(conn, "git-upload-pack", [head, refs, PktLine.flush()])
-    else
-      {:error, :bad_argument, argument} ->
-        result(
-          conn,
-          "git-upload-pack",
-          PktLine.error("unsupported ls-refs argument #{inspect(argument)}")
-        )
-
-      {:error, reason} ->
-        store_error(conn, reason)
-    end
-  end
-
-  # peel is accepted and its attribute omitted, which only costs git an optimization.
-  defp ls_refs_options(arguments) do
-    Enum.reduce_while(arguments, {:ok, %{symrefs: false, unborn: false, prefixes: []}}, fn
-      "symrefs", {:ok, options} ->
-        {:cont, {:ok, %{options | symrefs: true}}}
-
-      "unborn", {:ok, options} ->
-        {:cont, {:ok, %{options | unborn: true}}}
-
-      "peel", {:ok, options} ->
-        {:cont, {:ok, options}}
-
-      "ref-prefix " <> prefix, {:ok, options} ->
-        {:cont, {:ok, %{options | prefixes: [prefix | options.prefixes]}}}
-
-      other, _ ->
-        {:halt, {:error, :bad_argument, other}}
-    end)
   end
 
   # Git-Protocol holds `:`-separated key=value entries.
@@ -299,12 +188,22 @@ defmodule GitServer.Plug do
     |> send_resp(200, body)
   end
 
+  # A service's whole response.
   @doc false
   def result(conn, service, body) do
+    conn |> result_headers(service) |> send_resp(200, body)
+  end
+
+  # Starts a service's streamed response; the caller sends the rest with `chunk/2`.
+  @doc false
+  def chunked_result(conn, service) do
+    conn |> result_headers(service) |> send_chunked(200)
+  end
+
+  defp result_headers(conn, service) do
     conn
     |> put_resp_content_type("application/x-#{service}-result", nil)
     |> put_resp_header("cache-control", "no-cache")
-    |> send_resp(200, body)
   end
 
   @doc false

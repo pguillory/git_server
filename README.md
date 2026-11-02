@@ -4,8 +4,6 @@ A Git smart HTTP server for Elixir, as a Plug, that keeps every repository in an
 S3-compatible bucket (Cloudflare R2, MinIO, or any S3 API). Clone, fetch, pull and
 push work with the ordinary `git` client.
 
-Work in progress: fetching objects is not implemented yet.
-
 ## Trying it
 
 `dev/demo.exs` serves repositories from a bucket on `http://127.0.0.1:4000`:

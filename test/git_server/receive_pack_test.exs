@@ -29,8 +29,7 @@ defmodule GitServer.ReceivePackTest do
     String.trim(id)
   end
 
-  # A local clone whose origin is the server's repository. (Fetching is another
-  # module's job; these tests push.)
+  # A local clone whose origin is the server's repository.
   defp clone!(base, url, dir) do
     {_, 0} = git(["clone", "-q", base, dir])
     {_, 0} = git(["remote", "set-url", "origin", url], cd: dir)
@@ -91,6 +90,11 @@ defmodule GitServer.ReceivePackTest do
     assert %{packs: [_, _]} = state(server, "big")
     verify_packs!(server, "big", tmp_dir)
     assert state(server, "big").refs == %{"refs/heads/main" => rev!(local, "HEAD")}
+
+    clone = Path.join(tmp_dir, "clone")
+    {_, 0} = git(["clone", "-q", url, clone])
+    assert rev!(clone, "HEAD") == rev!(local, "HEAD")
+    assert {_, 0} = git(["fsck", "--full"], cd: clone)
   end
 
   test "tags, an annotated tag and a branch delete", %{tmp_dir: tmp_dir} do
