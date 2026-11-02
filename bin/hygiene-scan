@@ -1,0 +1,64 @@
+#!/bin/bash
+# Scans the whole history and the working tree for things that must never be in
+# this public repository, before every push. Prints each hit for a person to read;
+# exits 1 if there were any.
+#
+# Generic secret shapes are checked here. A private term list (names that must not
+# appear, one fixed string per line) can be given as the first argument; keep that
+# file outside the repository.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+terms_file="${1:-}"
+status=0
+
+# AWS-style key ids, private keys, password assignments, bearer tokens, and long hex
+# or base64 runs (account ids, secret keys). Lockfile hashes are expected and skipped.
+patterns=(
+  'AKIA[0-9A-Z]{16}'
+  'BEGIN [A-Z ]*PRIVATE KEY'
+  'password[[:space:]]*[=:][[:space:]]*[^[:space:]$]{6,}'
+  '[Bb]earer [A-Za-z0-9._~+/-]{16,}'
+  '(^|[^0-9a-fA-F])[0-9a-fA-F]{32}([^0-9a-fA-F]|$)'
+  '[A-Za-z0-9+/]{40,}={0,2}'
+)
+
+scan() {
+  local label=$1 pattern=$2 flags=$3
+  local hits
+  hits=$(
+    {
+      git log -p --all --format='%an <%ae>%n%B' -- . ':!mix.lock'
+      git ls-files -co --exclude-standard -- . ':!mix.lock' | while IFS= read -r file; do
+        [[ -f "$file" ]] && sed "s|^|$file: |" "$file"
+      done
+    } | grep $flags -e "$pattern" | sort -u
+  )
+
+  if [[ -n "$hits" ]]; then
+    echo "== $label"
+    echo "$hits"
+    status=1
+  fi
+}
+
+for pattern in "${patterns[@]}"; do
+  scan "pattern $pattern" "$pattern" -E
+done
+
+if [[ -n "$terms_file" ]]; then
+  while IFS= read -r term; do
+    [[ -z "$term" || "$term" == \#* ]] && continue
+    scan "private term (line hidden)" "$term" -iF
+  done <"$terms_file"
+fi
+
+# Commit identities other than the project's.
+others=$(git log --all --format='%an <%ae>%n%cn <%ce>' | sort -u | grep -vxF 'Preston Guillory <pguillory@gmail.com>')
+if [[ -n "$others" ]]; then
+  echo "== other commit identities"
+  echo "$others"
+  status=1
+fi
+
+exit $status
