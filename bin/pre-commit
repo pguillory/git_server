@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+
+exec 1>&2
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+  against=HEAD
+else
+  # Initial commit: diff against an empty tree object
+  against=$(git hash-object -t tree /dev/null)
+fi
+
+git diff-index --check --cached $against --
+
+mix format --check-formatted
+MIX_ENV=test mix compile --warnings-as-errors
+exec mix test --warnings-as-errors

@@ -1,0 +1,18 @@
+# Mix build output and dependencies.
+/_build/
+/deps/
+/cover/
+/doc/
+/.fetch
+*.ez
+git_server-*.tar
+
+# If the VM crashes, it generates a dump.
+erl_crash.dump
+
+# Temporary files, for example from tests and bin/test-s3-local.
+/tmp/
+
+# Credentials never belong in the repository.
+*.env
+.env*

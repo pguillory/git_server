@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# A shared/global hooksPath must never acquire a repository-specific hook.
+hooks_config=$(git config --show-scope --get core.hooksPath) || [[ $? -eq 1 ]]
+if [[ -n "$hooks_config" && "$hooks_config" != local$'\t'* && "$hooks_config" != worktree$'\t'* ]]; then
+  echo "Refusing to install into a hooksPath not configured for this repository." >&2
+  exit 1
+fi
+
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
+hook_source="$(dirname "$common_dir")/bin/pre-commit"
+if [[ ! -x "$hook_source" ]]; then
+  echo "Cannot find executable bin/pre-commit beside the common Git directory; unsupported repository layout." >&2
+  exit 1
+fi
+
+hooks_dir=$(git rev-parse --path-format=absolute --git-path hooks)
+mkdir -p "$hooks_dir"
+ln -sfn "$hook_source" "$hooks_dir/pre-commit"
