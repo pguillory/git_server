@@ -1,0 +1,328 @@
+defmodule GitServer.UploadPackTest do
+  # Repositories seeded in the store with packs real git wrote, read with the real git
+  # client. Requests that client never sends go through Plug.Test.
+  use ExUnit.Case, async: true
+  import GitServer.TestGit
+  import Plug.Conn, only: [put_req_header: 3]
+  alias GitServer.{GitFixture, ObjectId, PktLine, Repository, Seed, Store, TestServer}
+
+  @moduletag :tmp_dir
+
+  defp clone!(server, name, tmp_dir, dir \\ "clone") do
+    path = Path.join(tmp_dir, dir)
+    {_, 0} = git(["clone", "-q", TestServer.url(server, name), path])
+    path
+  end
+
+  defp rev_parse!(dir, rev) do
+    {output, 0} = git(["rev-parse", rev], cd: dir)
+    String.trim(output)
+  end
+
+  defp assert_fsck_clean(dir) do
+    assert {output, 0} = git(["fsck", "--full", "--strict"], cd: dir)
+    refute output =~ ~r/error|missing/
+  end
+
+  describe "with the real git client" do
+    test "a clone is identical to the source", %{tmp_dir: tmp_dir} do
+      source = GitFixture.build!(Path.join(tmp_dir, "source"))
+      server = TestServer.start!()
+      Seed.push!(server.store, "fixture", source)
+
+      clone = clone!(server, "fixture.git", tmp_dir)
+
+      assert_fsck_clean(clone)
+      assert rev_parse!(clone, "HEAD") == Seed.rev_parse!(source, "HEAD")
+      assert rev_parse!(clone, "v1") == Seed.rev_parse!(source, "v1")
+      assert {_, 0} = System.cmd("diff", ["-r", "-x", ".git", "-x", "sub", source.repo, clone])
+
+      {objects, 0} = git(["rev-list", "--objects", "--all"], cd: clone)
+      {source_objects, 0} = git(["rev-list", "--objects", "--all"], cd: source.repo)
+      assert objects == source_objects
+    end
+
+    test "a pull fetches only the new objects", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      first = Seed.commit!(source, "file", "one\n")
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      clone = clone!(server, "repo", tmp_dir)
+
+      second = Seed.commit!(source, "file", "two\n")
+      Seed.push!(server.store, "repo", source, [second, "^" <> first])
+
+      # A commit, its tree and the file: git passes on the count from the pack's header.
+      {output, 0} = git(["pull"], cd: clone, env: [{"GIT_TRACE", "1"}])
+      assert output =~ "--pack_header=2,3\n"
+      assert output =~ "Fast-forward"
+      assert File.read!(Path.join(clone, "file")) == "two\n"
+      assert rev_parse!(clone, "HEAD") == second
+      assert_fsck_clean(clone)
+    end
+
+    test "fetching tags, explicitly and followed", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      Seed.commit!(source, "file", "one\n")
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      clone = clone!(server, "repo", tmp_dir)
+
+      second = Seed.commit!(source, "file", "two\n")
+      {_, 0} = git(["tag", "-a", "annotated", "-m", "a tag"], cd: source.repo)
+      {_, 0} = git(["tag", "light"], cd: source.repo)
+      Seed.push!(server.store, "repo", source, ["--all", "--not", second <> "~1"])
+
+      {_, 0} = git(["fetch", "-q", "origin", "refs/tags/light:refs/tags/light"], cd: clone)
+      assert rev_parse!(clone, "light") == second
+
+      # A fetch of the branch follows the annotated tag.
+      {_, 0} = git(["fetch", "-q", "origin"], cd: clone)
+      assert rev_parse!(clone, "annotated") == Seed.rev_parse!(source, "annotated")
+      assert rev_parse!(clone, "annotated^{commit}") == second
+      assert_fsck_clean(clone)
+    end
+
+    test "refs spread across three packs", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      first = Seed.commit!(source, "file", "one\n")
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+
+      {_, 0} = git(["checkout", "-q", "-b", "side"], cd: source.repo)
+      side = Seed.commit!(source, "side", "side\n")
+      Seed.push!(server.store, "repo", source, [side, "^" <> first])
+
+      {_, 0} = git(["checkout", "-q", "main"], cd: source.repo)
+      main = Seed.commit!(source, "main", "main\n")
+      Seed.push!(server.store, "repo", source, [main, "^" <> first])
+
+      {:ok, state, _} = Repository.read_state(server.store, "repo")
+      assert length(state.packs) == 3
+
+      clone = clone!(server, "repo", tmp_dir)
+      assert rev_parse!(clone, "origin/side") == side
+      assert rev_parse!(clone, "origin/main") == main
+      assert File.exists?(Path.join(clone, "main"))
+      assert_fsck_clean(clone)
+    end
+
+    test "a want must be reachable from a ref", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      first = Seed.commit!(source, "file", "one\n")
+      second = Seed.commit!(source, "file", "two\n")
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+
+      # A commit in a listed pack that no ref points to.
+      {_, 0} = git(["checkout", "-q", "-b", "orphan"], cd: source.repo)
+      orphan = Seed.commit!(source, "orphan", "orphan\n")
+      Seed.push_pack_only!(server.store, "repo", source, [orphan, "^" <> second])
+
+      clone = Path.join(tmp_dir, "clone")
+      {_, 0} = git(["init", "-q", clone])
+      url = TestServer.url(server, "repo")
+
+      {output, 128} = git(["fetch", url, orphan], cd: clone)
+      assert output =~ "not our ref #{orphan}"
+      {output, 128} = git(["fetch", url, String.duplicate("1", 40)], cd: clone)
+      assert output =~ "not our ref"
+
+      # An ancestor of a tip is reachable, though no ref names it.
+      {_, 0} = git(["fetch", "-q", url, first], cd: clone)
+      assert rev_parse!(clone, "FETCH_HEAD") == first
+      assert_fsck_clean(clone)
+      assert {_, status} = git(["cat-file", "-e", orphan], cd: clone)
+      assert status != 0
+    end
+
+    test "ls-refs peels annotated tags, and needs no pack to list branches", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      commit = Seed.commit!(source, "file", "one\n")
+      {_, 0} = git(["tag", "light"], cd: source.repo)
+      {_, 0} = git(["tag", "-a", "v1", "-m", "a tag"], cd: source.repo)
+      {_, 0} = git(["tag", "-a", "v2", "-m", "a tag of a tag", "v1"], cd: source.repo)
+      server = TestServer.start!()
+      pack = Seed.push!(server.store, "repo", source)
+      v1 = Seed.rev_parse!(source, "v1")
+      v2 = Seed.rev_parse!(source, "v2")
+      url = TestServer.url(server, "repo")
+
+      assert git(["ls-remote", url]) ==
+               {"""
+                #{commit}\tHEAD
+                #{commit}\trefs/heads/main
+                #{commit}\trefs/tags/light
+                #{v1}\trefs/tags/v1
+                #{commit}\trefs/tags/v1^{}
+                #{v2}\trefs/tags/v2
+                #{commit}\trefs/tags/v2^{}
+                """, 0}
+
+      :ok = Store.delete(server.store, Repository.pack_key("repo", pack))
+      assert git(["ls-remote", "--heads", url]) == {"#{commit}\trefs/heads/main\n", 0}
+    end
+
+    test "many haves arrive gzipped, over several rounds", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      first = Seed.commit!(source, "file", "one\n")
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      clone = clone!(server, "repo", tmp_dir)
+
+      for i <- 1..60 do
+        {_, 0} = git(["commit", "-q", "--allow-empty", "-m", "local #{i}"], cd: clone)
+      end
+
+      second = Seed.commit!(source, "file", "two\n")
+      Seed.push!(server.store, "repo", source, [second, "^" <> first])
+
+      {output, 0} =
+        git(["fetch", "origin"],
+          cd: clone,
+          env: [{"GIT_TRACE_CURL", "1"}, {"GIT_TRACE_PACKET", "1"}]
+        )
+
+      assert output =~ ~r/Send header: Content-Encoding: gzip/i
+      assert output =~ "fetch< NAK"
+      assert output =~ "fetch< ready"
+      assert rev_parse!(clone, "origin/main") == second
+      assert_fsck_clean(clone)
+    end
+  end
+
+  describe "fetch requests" do
+    setup %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      first = Seed.commit!(source, "file", "one\n")
+      second = Seed.commit!(source, "file", "two\n")
+      store = GitServer.TestStore.fresh()
+      Seed.push!(store, "repo", source)
+      temp_dir = Path.join(tmp_dir, "requests")
+      File.mkdir_p!(temp_dir)
+
+      %{
+        first: first,
+        second: second,
+        store: store,
+        temp_dir: temp_dir,
+        opts: [store: store, temp_dir: temp_dir, authorize: fn _ -> :ok end],
+      }
+    end
+
+    defp fetch(opts, arguments, repo \\ "repo") do
+      body = [
+        PktLine.encode("command=fetch\n"),
+        PktLine.encode("object-format=sha1\n"),
+        PktLine.delim(),
+        Enum.map(arguments, &PktLine.encode(&1 <> "\n")),
+        PktLine.flush(),
+      ]
+
+      conn =
+        Plug.Test.conn(:post, "/#{repo}/git-upload-pack", IO.iodata_to_binary(body))
+        |> put_req_header("git-protocol", "version=2")
+        |> GitServer.Plug.call(GitServer.Plug.init(opts))
+
+      assert conn.status == 200
+      assert {:ok, packets} = PktLine.decode(conn.resp_body)
+
+      assert Plug.Conn.get_resp_header(conn, "content-type") == [
+               "application/x-git-upload-pack-result",
+             ]
+
+      packets
+    end
+
+    # The object count in a pack's header, after checking its trailer, from data packets.
+    defp pack_count(packets) do
+      data = for <<1, data::binary>> <- packets, into: <<>>, do: data
+      size = byte_size(data) - ObjectId.size()
+      <<pack::binary-size(size), trailer::binary>> = data
+      assert ObjectId.hash(pack) == trailer
+      <<"PACK", 2::32, count::32, _::binary>> = pack
+      count
+    end
+
+    test "with done, only the packfile section", %{opts: opts, first: first, second: second} do
+      assert ["packfile\n" | rest] = fetch(opts, ["want #{second}", "done"])
+      assert List.last(rest) == :flush
+      assert pack_count(rest) == 6
+
+      assert ["packfile\n" | rest] =
+               fetch(
+                 opts,
+                 ["want #{second}", "have #{first}", "thin-pack", "no-progress"] ++
+                   ["include-tag", "ofs-delta", "done"]
+               )
+
+      assert pack_count(rest) == 3
+
+      # Everything wanted is already there: a valid, empty pack.
+      assert ["packfile\n" | rest] = fetch(opts, ["want #{first}", "have #{second}", "done"])
+      assert pack_count(rest) == 0
+    end
+
+    test "without done, a known have means ready", %{opts: opts, first: first, second: second} do
+      unknown = String.duplicate("1", 40)
+
+      assert [
+               "acknowledgments\n",
+               "ACK " <> ack,
+               "ready\n",
+               :delim,
+               "packfile\n" | rest
+             ] = fetch(opts, ["want #{second}", "have #{unknown}", "have #{first}"])
+
+      assert ack == first <> "\n"
+      assert pack_count(rest) == 3
+    end
+
+    test "without done or a known have, a NAK", %{opts: opts, second: second} do
+      nak = ["acknowledgments\n", "NAK\n", :flush]
+      assert fetch(opts, ["want #{second}"]) == nak
+      assert fetch(opts, ["want #{second}", "have #{String.duplicate("1", 40)}"]) == nak
+    end
+
+    test "bad requests get an ERR packet", %{opts: opts, second: second} do
+      for {arguments, message} <- [
+            {[], "ERR fetch needs at least one want"},
+            {["done"], "ERR fetch needs at least one want"},
+            {["want abc"], "ERR malformed want"},
+            {["want #{String.duplicate("z", 40)}"], "ERR malformed want"},
+            {["want #{second}", "have abc"], "ERR malformed have"},
+            {["want #{second}", "filter blob:none"], "ERR unsupported fetch argument"},
+            {["want #{second}", "deepen 1"], "ERR unsupported fetch argument"},
+            {["want #{second}", "sideband-all"], "ERR unsupported fetch argument"},
+            {["want #{String.duplicate("1", 40)}", "done"], "ERR upload-pack: not our ref"},
+          ] do
+        assert [packet] = fetch(opts, arguments)
+        assert String.starts_with?(packet, message), inspect({arguments, packet})
+      end
+    end
+
+    test "an object over the cap fails the pack on band 3",
+         %{opts: opts, store: store} = context do
+      source = Seed.source!(Path.join(context.tmp_dir, "big"))
+      big = Seed.commit!(source, "file", String.duplicate("x", 2000))
+      Seed.push!(store, "big", source)
+
+      opts = [max_object_bytes: 1000] ++ opts
+      assert ["packfile\n" | rest] = fetch(opts, ["want #{big}", "done"], "big")
+      assert List.last(rest) == :flush
+      assert [<<3, "git_server: object too large\n">>] = for(<<3, _::binary>> = p <- rest, do: p)
+      assert File.ls!(context.temp_dir) == []
+    end
+
+    test "request files are gone afterwards", %{opts: opts, temp_dir: temp_dir, second: second} do
+      for arguments <- [
+            ["want #{second}", "done"],
+            ["want #{second}"],
+            ["want #{"1" |> String.duplicate(40)}"],
+          ] do
+        fetch(opts, arguments)
+        assert File.ls!(temp_dir) == []
+      end
+    end
+  end
+end

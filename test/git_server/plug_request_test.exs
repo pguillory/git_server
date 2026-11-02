@@ -195,7 +195,7 @@ defmodule GitServer.PlugRequestTest do
              PktLine.encode("command=fetch\n"),
              PktLine.delim(),
              PktLine.flush(),
-           ]), "ERR git_server: fetch"},
+           ]), "ERR fetch needs at least one want"},
           {IO.iodata_to_binary([PktLine.encode("command=other\n"), PktLine.flush()]),
            "ERR unknown command"},
           {IO.iodata_to_binary([PktLine.encode("nothing\n"), PktLine.flush()]),
