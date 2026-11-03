@@ -15,7 +15,7 @@ defmodule GitServer.UploadPack do
   """
 
   import Plug.Conn, only: [chunk: 2]
-  alias GitServer.{HTTP, Object, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
+  alias GitServer.{Config, HTTP, Object, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
   alias GitServer.Pack.Writer
 
   @service "git-upload-pack"
@@ -340,7 +340,7 @@ defmodule GitServer.UploadPack do
   defp with_objects(conn, config, repo, fun) do
     result =
       Repository.with_snapshot(config.store, repo, config.temp_dir, fn snapshot ->
-        with {:ok, db} <- ObjectDB.open(snapshot.packs, max_object_bytes: config.max_object_bytes) do
+        with {:ok, db} <- ObjectDB.open(snapshot.packs, Config.read_limits(config)) do
           try do
             fun.(snapshot, db)
           after

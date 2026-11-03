@@ -100,7 +100,13 @@ bodies unread.
 - `:authorize` (required): see below.
 - `:temp_dir`: where request files go. Default `System.tmp_dir!()`.
 - `:max_pack_bytes`: the largest pack a push may send. Default 100 MB.
-- `:max_object_bytes`: the largest object, inflated. Default 50 MB.
+- `:max_objects`: the most objects in a pushed pack. Default 100,000.
+- `:max_object_bytes`: the largest object, inflated, in a push or a stored pack. Default
+  50 MB.
+- `:max_delta_depth`: the longest delta chain, in a push or a stored pack. Default 100.
+
+The pack size and object count limit what a push may send; a pack already stored is
+read whatever its size and count.
 - `:max_request_bytes`: the largest upload-pack request body, raw and inflated. Default
   10 MB.
 - `:max_command_bytes`: the largest command section of a push. Default 1 MB.

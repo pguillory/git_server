@@ -7,7 +7,11 @@ defmodule GitServer.Config do
   - `:authorize` (required): a function of one map, see `GitServer.Plug`.
   - `:temp_dir`: where request files go (default `System.tmp_dir!/0`).
   - `:max_pack_bytes`: the largest pack a push may send (default 100 MB).
-  - `:max_object_bytes`: the largest object, inflated (default 50 MB).
+  - `:max_objects`: the most objects in a pushed pack (default 100,000).
+  - `:max_object_bytes`: the largest object, inflated, in a push or a stored pack
+    (default 50 MB).
+  - `:max_delta_depth`: the longest delta chain, in a push or a stored pack
+    (default 100).
   - `:max_request_bytes`: the largest upload-pack request body, raw and inflated
     (default 10 MB).
   - `:max_command_bytes`: the largest command section of a push (default 1 MB).
@@ -26,7 +30,9 @@ defmodule GitServer.Config do
     :authorize,
     :temp_dir,
     max_pack_bytes: 100_000_000,
+    max_objects: 100_000,
     max_object_bytes: 50_000_000,
+    max_delta_depth: 100,
     max_request_bytes: 10_000_000,
     max_command_bytes: 1_000_000,
     push_deadline_ms: 15_000,
@@ -60,5 +66,23 @@ defmodule GitServer.Config do
     end
 
     struct!(__MODULE__, Map.put_new_lazy(opts, :temp_dir, &System.tmp_dir!/0))
+  end
+
+  @doc """
+  The limits for indexing a pushed pack (`GitServer.Pack.Indexer`). The pack size and
+  object count apply only to pushes, never to a stored pack.
+  """
+  def push_limits(%__MODULE__{} = config) do
+    [
+      max_pack_bytes: config.max_pack_bytes,
+      max_objects: config.max_objects,
+      max_object_bytes: config.max_object_bytes,
+      max_delta_depth: config.max_delta_depth,
+    ]
+  end
+
+  @doc "The limits for reading stored packs (`GitServer.ObjectDB`)."
+  def read_limits(%__MODULE__{} = config) do
+    [max_object_bytes: config.max_object_bytes, max_delta_depth: config.max_delta_depth]
   end
 end

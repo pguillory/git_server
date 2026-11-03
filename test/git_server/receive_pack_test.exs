@@ -97,6 +97,34 @@ defmodule GitServer.ReceivePackTest do
     assert {_, 0} = git(["fsck", "--full"], cd: clone)
   end
 
+  test "max_objects limits a push, max_delta_depth a push and a stored pack", %{
+    tmp_dir: tmp_dir,
+  } do
+    server = TestServer.start!()
+    few_objects = TestServer.start!(store: server.store, max_objects: 2)
+    no_deltas = TestServer.start!(store: server.store, max_delta_depth: 0)
+    local = init!(Path.join(tmp_dir, "local"))
+    lines = for i <- 1..3000, do: "line #{i} of a text file that changes a little each time\n"
+
+    for round <- 1..4 do
+      commit!(local, "big.txt", List.replace_at(lines, round * 100, "round #{round}\n"))
+    end
+
+    {output, 1} = git(["push", TestServer.url(few_objects, "big"), "main"], cd: local)
+    assert output =~ "too many objects"
+    {output, 1} = git(["push", TestServer.url(no_deltas, "big"), "main"], cd: local)
+    assert output =~ "delta chain too deep"
+    {_, 0} = git(["push", TestServer.url(server, "big"), "main"], cd: local)
+
+    # A stored pack is read whatever its object count, but not past the delta depth.
+    {_, 0} = git(["clone", "-q", TestServer.url(few_objects, "big"), Path.join(tmp_dir, "a")])
+
+    {output, 128} =
+      git(["clone", "-q", TestServer.url(no_deltas, "big"), Path.join(tmp_dir, "b")])
+
+    assert output =~ "delta chain too deep"
+  end
+
   test "tags, an annotated tag and a branch delete", %{tmp_dir: tmp_dir} do
     server = TestServer.start!()
     local = init!(Path.join(tmp_dir, "local"))

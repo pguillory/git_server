@@ -11,7 +11,7 @@ defmodule GitServer.ReceivePack.Update do
   # from `before_update`.
 
   require Logger
-  alias GitServer.{ObjectDB, ObjectId, Repository, State, Store}
+  alias GitServer.{Config, ObjectDB, ObjectId, Repository, State, Store}
   alias GitServer.Pack.Indexer
 
   @zero_id String.duplicate("0", 40)
@@ -25,10 +25,7 @@ defmodule GitServer.ReceivePack.Update do
   end
 
   def run(conn, config, repo, commands, options, pack_path) do
-    case Indexer.index(pack_path,
-           max_pack_bytes: config.max_pack_bytes,
-           max_object_bytes: config.max_object_bytes
-         ) do
+    case Indexer.index(pack_path, Config.push_limits(config)) do
       {:ok, pack} -> update(conn, config, repo, commands, options, {pack_path, pack})
       {:error, reason} -> unpack_failed(commands, reason)
     end
@@ -181,7 +178,7 @@ defmodule GitServer.ReceivePack.Update do
   # In the worker. Only the kind of a failure is reported, never an exception's
   # message or a returned value, which may quote pushed content.
   defp call_before_update(config, packs, fields) do
-    case ObjectDB.open(packs, max_object_bytes: config.max_object_bytes) do
+    case ObjectDB.open(packs, Config.read_limits(config)) do
       {:ok, db} ->
         try do
           case config.before_update.(struct!(GitServer.Push, Map.put(fields, :db, db))) do
@@ -207,7 +204,7 @@ defmodule GitServer.ReceivePack.Update do
 
   # The repository's objects, open in this process for the length of `fun`.
   defp with_db(snapshot, config, fun) do
-    case ObjectDB.open(snapshot.packs, max_object_bytes: config.max_object_bytes) do
+    case ObjectDB.open(snapshot.packs, Config.read_limits(config)) do
       {:ok, db} ->
         try do
           fun.(db)
