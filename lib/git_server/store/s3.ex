@@ -11,7 +11,10 @@ defmodule GitServer.Store.S3 do
 
   A failed call is `:not_found`, `:precondition_failed` (HTTP 409 or 412) or a
   message, and requests are not retried. Timeouts: 5 s to connect, 15 s to receive
-  each part of a response. Nothing from a response body or header is ever logged or
+  each part of a response. A connection is kept for reuse, but one idle for more than
+  5 s is closed when next checked out and a new one opened instead: servers close
+  idle connections (MinIO within 20 to 35 s), and a request sent on one just as the
+  server closes it fails. Nothing from a response body or header is ever logged or
   returned in an error.
   """
 
@@ -21,7 +24,7 @@ defmodule GitServer.Store.S3 do
   @derive {Inspect, except: [:secret_access_key]}
   defstruct @enforce_keys
 
-  @connect_timeout 5_000
+  @max_idle_time 5_000
   @chunk_bytes 65_536
 
   @doc """
@@ -293,7 +296,9 @@ defmodule GitServer.Store.S3 do
         retry: false,
         redirect: false,
         compressed: false,
-        connect_options: [timeout: @connect_timeout],
+        # Only this pool option: connection options set here would replace the ones
+        # Req derives, such as IPv6 for an [::1] endpoint. Finch connects within 5 s.
+        finch: [conn_max_idle_time: @max_idle_time],
       ]
       |> Req.new()
       |> ReqS3.attach(aws_endpoint_url_s3: config.endpoint)
