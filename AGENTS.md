@@ -49,8 +49,10 @@ supplies the store configuration and an `authorize` callback, and holds every se
   state write, and snapshots (the listed packs downloaded to a temp directory).
 - `GitServer.ReceivePack`: push, the receive-pack advertisement and request: commands,
   the pack indexed and checked against the state, the pack stored, then the
-  conditional state write retried while other pushes win. `GitServer.RefName`: the
-  ref names a push may update.
+  conditional state write retried while other pushes win, with the host's
+  `before_update` check run in its own process on every attempt. `GitServer.Push`: what
+  that check sees, and reading files at a commit (`list_files`, `read_file`).
+  `GitServer.RefName`: the ref names a push may update.
 - `GitServer.Store`: the store behaviour (`get`, `get_file`, `put`, `put_file` with a
   condition, `delete`, `list`). `GitServer.Store.S3` is its implementation.
 

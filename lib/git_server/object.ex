@@ -78,6 +78,50 @@ defmodule GitServer.Object do
 
   def parse_links(:tree, content, max), do: tree_links(content, [], 0, max)
 
+  @doc """
+  A tree's entries in order, each `{kind, name, id}`: `kind` is `:tree`, `:file`,
+  `:executable`, `:symlink` or `:submodule`, read from the entry's mode the way git
+  reads it. Returns `{:error, "malformed tree"}` when the content isn't a tree.
+  """
+  @spec tree_entries(binary) ::
+          {:ok, [{:tree | :file | :executable | :symlink | :submodule, binary, ObjectId.t()}]}
+          | {:error, String.t()}
+  def tree_entries(content), do: tree_entries(content, [])
+
+  defp tree_entries(<<>>, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp tree_entries(content, acc) do
+    id_size = ObjectId.size()
+
+    with [mode, rest] <- :binary.split(content, " "),
+         {:ok, kind} <- entry_kind(mode),
+         [name, <<id::binary-size(id_size), rest::binary>>] when name != "" <-
+           :binary.split(rest, <<0>>) do
+      kind =
+        case kind do
+          :tree -> :tree
+          :gitlink -> :submodule
+          :blob -> blob_kind(mode)
+        end
+
+      tree_entries(rest, [{kind, :binary.copy(name), :binary.copy(id)} | acc])
+    else
+      _ -> {:error, "malformed tree"}
+    end
+  end
+
+  # A blob entry is a symlink (120000), an executable (the owner's execute bit, which
+  # is all git checks out) or a file.
+  defp blob_kind(mode) do
+    mode = String.to_integer(mode, 8)
+
+    cond do
+      Bitwise.band(mode, 0o170000) == 0o120000 -> :symlink
+      Bitwise.band(mode, 0o100) != 0 -> :executable
+      true -> :file
+    end
+  end
+
   # Whether `n` links fit within `max`.
   defp room(n, max) when n <= max, do: :ok
   defp room(_n, _max), do: :too_many

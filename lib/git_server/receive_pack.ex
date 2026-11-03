@@ -19,12 +19,14 @@ defmodule GitServer.ReceivePack do
      commit for a branch, and no new ref beside a ref that is its directory or
      inside it. (Ref names, and duplicate commands for one ref, were checked when
      the commands were read.)
-  4. The pack and its idx are stored, and then the new state is written only if the
+  4. The host's `:before_update` function, if any, is called with the updates that
+     passed (see "Checking a push" below).
+  5. The pack and its idx are stored, and then the new state is written only if the
      state is still the one checked. When another push got there first, the state
-     is read again, the commands checked again, and the write retried, with jittered
-     backoff, until `push_deadline_ms` has passed.
-  5. The result goes back as report-status, on side-band 1 when the client asked
-     for `side-band-64k`.
+     is read again, the commands and `:before_update` checked again, and the write
+     retried, with jittered backoff, until `push_deadline_ms` has passed.
+  6. The result goes back as report-status, on side-band 1 when the client asked
+     for `side-band-64k`, after any message from `:before_update` on side-band 2.
 
   Without `atomic`, commands that pass are applied and the others rejected. With it,
   one rejection rejects them all. Nothing is ever deleted here: a stored pack that no
@@ -33,6 +35,36 @@ defmodule GitServer.ReceivePack do
   If a push leaves HEAD's target missing and creates branches, HEAD moves to
   `refs/heads/main` if it exists, else `refs/heads/master`, else the first branch
   created, by name.
+
+  ## Checking a push
+
+  The `:before_update` option is a function of one `GitServer.Push`: the repository,
+  the conn, its refs before the push, and the updates that will land if it approves.
+  It can read files at any commit with `GitServer.Push.list_files/3` and
+  `GitServer.Push.read_file/3`. It is called only when at least one update passed the
+  server's own checks (the old value matches, the new object exists, a branch names a
+  commit, no ref name conflict, and `atomic`). Those checks don't refuse a forced
+  push; the function can.
+
+  It returns `:ok` to approve, or `{:reject, message}` to refuse the whole push: every
+  update it was shown fails with `declined`, and `message`, as given and of any length,
+  goes to the client on side-band 2, which git prints as `remote:` lines. The message
+  isn't changed or escaped, so quote pushed names in it with care. A ref the server
+  already rejected keeps its own reason.
+
+  It runs in a process of its own, killed if the request ends. If it raises, throws,
+  exits, returns anything else or runs past `:before_update_timeout_ms`, the push is
+  refused with `push check failed` and a fixed message, and the server logs the kind
+  of failure, an exception's module and the stacktrace without arguments, never an
+  exception's message or anything pushed.
+
+  When the state write loses a race, the function is called again against the new
+  state, and the write is conditional on exactly the state it was shown, so a push
+  only ever lands on a state the latest call approved. So it may be called more than
+  once for one push, and its approval doesn't mean the push landed. A rejection after
+  a lost race may leave the pack stored but unlisted, harmless as any unlisted pack.
+  A retry starts only before `push_deadline_ms`, so a slow function makes a push run
+  that much longer.
   """
 
   require Logger
@@ -149,7 +181,7 @@ defmodule GitServer.ReceivePack do
 
       if Enum.all?(commands, &delete?/1) do
         conn = Body.close(reader)
-        reply(conn, options, update(config, repo, commands, options, nil))
+        reply(conn, options, update(conn, config, repo, commands, options, nil))
       else
         receive_pack(reader, config, repo, commands, options, rest)
       end
@@ -247,7 +279,7 @@ defmodule GitServer.ReceivePack do
                  max_pack_bytes: config.max_pack_bytes,
                  max_object_bytes: config.max_object_bytes
                ) do
-            {:ok, pack} -> update(config, repo, commands, options, {path, pack})
+            {:ok, pack} -> update(conn, config, repo, commands, options, {path, pack})
             {:error, reason} -> unpack_failed(commands, reason)
           end
 
@@ -266,9 +298,12 @@ defmodule GitServer.ReceivePack do
     {{:error, reason}, Enum.map(commands, &reject(&1, "unpacker error"))}
   end
 
-  # Steps 3 and 4. Returns {unpack_status, commands}, each command's error set when
-  # it was rejected.
-  defp update(config, repo, commands, options, pack) do
+  # Steps 3 to 5. Returns {unpack_status, commands} or {unpack_status, commands,
+  # message}, each command's error set when it was rejected, and `message` text for
+  # the client from `before_update`.
+  defp update(conn, config, repo, commands, options, pack) do
+    options = Map.put(options, :conn, conn)
+
     if Enum.all?(commands, & &1.error) do
       {:ok, commands}
     else
@@ -298,11 +333,11 @@ defmodule GitServer.ReceivePack do
         end
       end)
 
-    # The point for a future `before_update` hook (validation of the updates before
-    # anything is stored), which could reject commands and send messages on band 2.
-
+    # The host's check runs on every attempt, so the state written is always one it
+    # approved: the write below is conditional on exactly this snapshot's state.
     with {:ok, checked} <- checked,
          passing when passing != [] <- Enum.reject(checked, & &1.error),
+         :ok <- before_update(config, snapshot, pack, options.conn, passing),
          {:ok, name} <- store_pack(config, snapshot, pack, stored) do
       new_state = apply_commands(snapshot.state, passing, name)
 
@@ -338,11 +373,173 @@ defmodule GitServer.ReceivePack do
           {:ok, storage_failed(checked, reason)}
       end
     else
-      [] -> {:ok, elem(checked, 1)}
-      {:error, :links, reason} -> unpack_failed(commands, reason)
-      {:error, :storage, reason} -> {:ok, storage_failed(commands, reason)}
-      {:error, reason} -> {:ok, storage_failed(elem(checked, 1), reason)}
+      [] ->
+        {:ok, elem(checked, 1)}
+
+      {:declined, reason, message} ->
+        {:ok, Enum.map(elem(checked, 1), &reject(&1, reason)), message}
+
+      {:error, :links, reason} ->
+        unpack_failed(commands, reason)
+
+      {:error, :storage, reason} ->
+        {:ok, storage_failed(commands, reason)}
+
+      {:error, reason} ->
+        {:ok, storage_failed(elem(checked, 1), reason)}
     end
+  end
+
+  # The host's `before_update` function, on the updates that passed. It runs in its
+  # own process, with its own object database, so a timeout can kill it. Returns :ok,
+  # {:declined, reason, message}, or {:error, :storage, reason}.
+  defp before_update(%{before_update: nil}, _snapshot, _pack, _conn, _passing), do: :ok
+
+  defp before_update(config, snapshot, pack, conn, passing) do
+    with {:ok, pushed} <- pushed_pack(pack) do
+      fields = %{
+        repo: snapshot.repo,
+        conn: conn,
+        refs: snapshot.state.refs,
+        updates: Enum.map(passing, &%{ref: &1.ref, old: present(&1.old), new: present(&1.new)}),
+      }
+
+      packs = snapshot.packs ++ pushed
+
+      case run_worker(
+             fn -> call_before_update(config, packs, fields) end,
+             config.before_update_timeout_ms
+           ) do
+        {:ok, :ok} -> :ok
+        {:ok, {:reject, message}} -> {:declined, "declined", message}
+        {:ok, {:storage, reason}} -> {:error, :storage, reason}
+        {:ok, {:failed, what}} -> check_failed(what)
+        :exited -> check_failed("exited")
+        :timeout -> check_failed("timed out after #{config.before_update_timeout_ms} ms")
+      end
+    end
+  end
+
+  # Runs `fun` in a process of its own, unlinked so that nothing it does can take the
+  # request down: `{:ok, result}`, `:exited` if it died first, or `:timeout`, when it
+  # is killed. Before running `fun`, the worker starts a guard that kills it if the
+  # request process dies, so it never outlives the request.
+  defp run_worker(fun, timeout) do
+    caller = self()
+    callers = [caller | Process.get(:"$callers", [])]
+    tag = make_ref()
+
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        worker = self()
+        spawn(fn -> guard(caller, worker) end)
+        # As `Task` does, for hosts whose test tools follow the calling process.
+        Process.put(:"$callers", callers)
+        send(caller, {tag, fun.()})
+      end)
+
+    receive do
+      {^tag, result} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        :exited
+    after
+      timeout ->
+        Process.exit(worker, :kill)
+
+        # The worker's last message, if any, comes before its :DOWN.
+        receive do
+          {:DOWN, ^monitor, :process, _pid, _reason} -> :ok
+        end
+
+        receive do
+          {^tag, _result} -> :ok
+        after
+          0 -> :ok
+        end
+
+        :timeout
+    end
+  end
+
+  defp guard(caller, worker) do
+    caller_monitor = Process.monitor(caller)
+    worker_monitor = Process.monitor(worker)
+
+    receive do
+      {:DOWN, ^caller_monitor, :process, _pid, _reason} -> Process.exit(worker, :kill)
+      {:DOWN, ^worker_monitor, :process, _pid, _reason} -> :ok
+    end
+  end
+
+  defp present(@zero_id), do: nil
+  defp present(id), do: id
+
+  # The pushed pack, with its idx beside it, for an object database.
+  defp pushed_pack(nil), do: {:ok, []}
+  defp pushed_pack({_path, %{objects: objects}}) when objects == %{}, do: {:ok, []}
+
+  defp pushed_pack({path, pack}) do
+    idx_path = Path.rootname(path) <> ".idx"
+
+    if File.exists?(idx_path) do
+      {:ok, [{path, idx_path}]}
+    else
+      case File.write(idx_path, pack.idx) do
+        :ok -> {:ok, [{path, idx_path}]}
+        {:error, posix} -> {:error, :storage, "cannot write the pack index: #{posix}"}
+      end
+    end
+  end
+
+  # In the worker. Only the kind of a failure is reported, never an exception's
+  # message or a returned value, which may quote pushed content.
+  defp call_before_update(config, packs, fields) do
+    case ObjectDB.open(packs, max_object_bytes: config.max_object_bytes) do
+      {:ok, db} ->
+        try do
+          case config.before_update.(struct!(GitServer.Push, Map.put(fields, :db, db))) do
+            :ok -> :ok
+            {:reject, message} when is_binary(message) -> {:reject, message}
+            _other -> {:failed, "returned something other than :ok or {:reject, message}"}
+          end
+        catch
+          kind, reason -> {:failed, failure(kind, reason, __STACKTRACE__)}
+        after
+          ObjectDB.close(db)
+        end
+
+      {:error, reason} ->
+        {:storage, reason}
+    end
+  end
+
+  defp failure(:error, reason, stacktrace) do
+    exception = Exception.normalize(:error, reason, stacktrace)
+    "raised #{inspect(exception.__struct__)}\n" <> locations(stacktrace)
+  end
+
+  defp failure(:throw, _value, stacktrace), do: "threw\n" <> locations(stacktrace)
+  defp failure(:exit, _reason, stacktrace), do: "exited\n" <> locations(stacktrace)
+
+  # The stacktrace without arguments, which could hold pushed content.
+  defp locations(stacktrace) do
+    stacktrace
+    |> Enum.map(fn
+      {module, function, args, location} when is_list(args) ->
+        {module, function, length(args), location}
+
+      entry ->
+        entry
+    end)
+    |> Exception.format_stacktrace()
+  end
+
+  defp check_failed(what) do
+    Logger.error("git_server: the before_update function #{what}")
+    {:declined, "push check failed", "The server could not check this push.\n"}
   end
 
   # The repository's objects, open in this process for the length of `fun`.
@@ -489,7 +686,7 @@ defmodule GitServer.ReceivePack do
 
   defp branch?(ref), do: String.starts_with?(ref, "refs/heads/")
 
-  # Step 4a: the pack and idx, before the first state write. A pack with no objects
+  # Step 5a: the pack and idx, before the first state write. A pack with no objects
   # is neither stored nor listed, and one the state already lists (a client retrying)
   # isn't stored again.
   defp store_pack(_config, _snapshot, _pack, {:stored, name}), do: {:ok, name}
@@ -551,8 +748,11 @@ defmodule GitServer.ReceivePack do
     %State{state | head: head, refs: refs, packs: packs}
   end
 
-  # Step 5: report-status, inner pkt-lines ending in a flush.
-  defp reply(conn, options, {unpack, commands}) do
+  # Step 6: report-status, inner pkt-lines ending in a flush, after any message from
+  # `before_update` on band 2, which git prints as `remote:` lines.
+  defp reply(conn, options, {unpack, commands}), do: reply(conn, options, {unpack, commands, nil})
+
+  defp reply(conn, options, {unpack, commands, message}) do
     unpack_line =
       case unpack do
         :ok -> "unpack ok\n"
@@ -570,11 +770,22 @@ defmodule GitServer.ReceivePack do
     body =
       cond do
         not options.report -> []
-        options.side_band -> [PktLine.sideband(1, report), PktLine.flush()]
+        options.side_band -> [message(message), PktLine.sideband(1, report), PktLine.flush()]
         true -> report
       end
 
     GitServer.Plug.result(conn, @service, body)
+  end
+
+  # Sent as given, split across as many packets as it takes, ending in a newline so
+  # git prints its last line.
+  defp message(nil), do: []
+  defp message(""), do: []
+
+  defp message(text) do
+    if String.ends_with?(text, "\n"),
+      do: PktLine.sideband(2, text),
+      else: PktLine.sideband(2, [text, "\n"])
   end
 
   # One report line's text, short enough for its pkt-line whatever it quotes.

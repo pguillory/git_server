@@ -13,6 +13,11 @@ defmodule GitServer.Config do
   - `:max_command_bytes`: the largest command section of a push (default 1 MB).
   - `:push_deadline_ms`: how long a push keeps retrying its state write while other
     pushes to the same repository win the race (default 15 seconds).
+  - `:before_update`: a function of one `GitServer.Push`, called before a push
+    changes anything, returning `:ok` or `{:reject, message}` (default none). See
+    "Checking a push" in `GitServer.ReceivePack`, and `GitServer.Push`.
+  - `:before_update_timeout_ms`: how long one call of `:before_update` may run
+    before the push is refused (default 30 seconds).
   """
 
   @enforce_keys [:store, :authorize, :temp_dir]
@@ -25,6 +30,8 @@ defmodule GitServer.Config do
     max_request_bytes: 10_000_000,
     max_command_bytes: 1_000_000,
     push_deadline_ms: 15_000,
+    before_update: nil,
+    before_update_timeout_ms: 30_000,
   ]
 
   @doc """
@@ -46,6 +53,10 @@ defmodule GitServer.Config do
     unless match?({_module, _config}, opts[:store]) and is_function(opts[:authorize], 1) do
       raise ArgumentError,
             "GitServer.Plug needs a :store and an :authorize function of one argument"
+    end
+
+    unless opts[:before_update] == nil or is_function(opts[:before_update], 1) do
+      raise ArgumentError, "GitServer.Plug's :before_update must be a function of one argument"
     end
 
     struct!(__MODULE__, Map.put_new_lazy(opts, :temp_dir, &System.tmp_dir!/0))

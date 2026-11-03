@@ -106,6 +106,9 @@ bodies unread.
 - `:max_command_bytes`: the largest command section of a push. Default 1 MB.
 - `:push_deadline_ms`: how long a push keeps retrying while other pushes to the same
   repository win the race. Default 15 seconds.
+- `:before_update`: a function that checks a push before it changes anything. See below.
+- `:before_update_timeout_ms`: how long one call of `:before_update` may run before the
+  push is refused. Default 30 seconds.
 
 Give them directly as the Plug's options, or as `config:` naming a function (`{module,
 function, args}` or a zero-arity function) that returns them on each request.
@@ -132,6 +135,61 @@ of letters, digits, `.`, `_` and `-`, at most 200 bytes in all. One trailing `.g
 URL is dropped, so `notes` and `notes.git` are the same repository. After that, no
 segment may start with `.` or end in `.git`. Anything else is 404, including any path
 with percent-encoding, and that happens before `authorize` is called.
+
+### Checking a push
+
+`:before_update` sees a push after the server's own checks pass and before anything
+is published, and can refuse it with a message git shows the user:
+
+```elixir
+before_update: fn push ->
+  errors =
+    for %{new: new} <- push.updates, new != nil do
+      case GitServer.Push.read_file(push, new, "config.toml") do
+        {:ok, text} -> MyApp.Config.errors(text)
+        :error -> ["config.toml is missing"]
+        {:error, reason} -> ["config.toml can't be read: #{reason}"]
+      end
+    end
+    |> List.flatten()
+
+  if errors == [], do: :ok, else: {:reject, Enum.join(errors, "\n")}
+end
+```
+
+It gets a `GitServer.Push`:
+
+- `repo`: the repository name.
+- `conn`: the `Plug.Conn`, to read (for example assigns your own plugs set), not to send on.
+- `refs`: the repository's refs before the push, `%{name => id}`.
+- `updates`: what lands if it approves, in the client's order:
+  `[%{ref: name, old: id | nil, new: id | nil}]`. `old: nil` creates a ref and `new: nil`
+  deletes one. Ids are hex. Only updates that passed the server's checks are listed.
+
+During the call, `GitServer.Push.list_files(push, id)` lists every file in the tree at a
+commit (or an annotated tag of one), and `GitServer.Push.read_file(push, id, path)` reads
+one, at a ref's old tip or its new one. Each object read is capped by `:max_object_bytes`,
+and a listing by entries and path bytes, so a hostile push can't make them expensive. A
+tree with an entry name that could check out somewhere else (`..`, `.git` or `.GIT`, a
+`/`, two names differing only in case) is an error, and `read_file` doesn't follow
+symlinks (reading through one is an error), so a path that reads is the file a clone
+would have there, short of rarer file-system aliases.
+
+It returns `:ok`, or `{:reject, message}` to refuse the whole push. Git then prints the
+message as `remote:` lines, as given (plus a final newline if it lacks one) and of any
+length, and reports every ref it was shown as
+`! [remote rejected] main -> main (declined)`. Nothing is published. The message isn't
+escaped, so take care quoting pushed file names in it.
+
+It fails closed: if it raises, throws, exits, returns anything else or runs past
+`:before_update_timeout_ms`, the push is refused with `push check failed` and the error is
+logged without anything from the push or from the exception's message.
+
+It may be called more than once for one push. When the state write loses a race to
+another push, the server checks again against the new state and calls the function again,
+and the write only succeeds on exactly the state the latest call saw. So a push never lands
+on a repository its check didn't see, and an approval doesn't mean the push landed. A push
+refused after a lost race may leave its pack stored but unlisted, which is harmless.
 
 ## Storage
 
@@ -173,7 +231,11 @@ These rest on the bucket's conditional writes being atomic. Tests cover them on 
 including two writers racing for one key.
 
 The server does not refuse a forced push: a client's `--force` replaces the branch. Use
-`authorize` to limit who may write.
+`authorize` to limit who may write, or `:before_update` to refuse rewrites.
+
+A client quirk to know about: after someone force-pushes over a commit you had pushed,
+`git pull --rebase` silently drops that commit, while a plain merge pull keeps both
+changes.
 
 ## Not supported
 
