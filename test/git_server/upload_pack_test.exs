@@ -220,6 +220,42 @@ defmodule GitServer.UploadPackTest do
       assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
     end
 
+    test "a fetch over its work budget fails, logged", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      lines = for i <- 1..3000, do: "line #{i} of a text file that changes a little each time\n"
+
+      for round <- 1..4 do
+        Seed.commit!(source, "big.txt", List.replace_at(lines, round * 100, "round #{round}\n"))
+      end
+
+      server = TestServer.start!(max_fetch_work_bytes: 1000)
+      Seed.push!(server.store, "repo", source)
+
+      log =
+        capture_log(fn ->
+          {output, 128} =
+            git(["clone", "-q", TestServer.url(server, "repo"), Path.join(tmp_dir, "clone")])
+
+          assert output =~ "too much work resolving delta bases"
+        end)
+
+      assert log =~ ~r/repository repo: pack [0-9a-f]{40}\.pack: too much work resolving delta/
+    end
+
+    test "large compressible blobs clone under the default work budget", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+
+      for name <- ~w(a b c) do
+        Seed.commit!(source, name, String.duplicate(name <> "012345678", 4_000_000))
+      end
+
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      clone = clone!(server, "repo", tmp_dir)
+      assert File.stat!(Path.join(clone, "c")).size == 40_000_000
+      assert_fsck_clean(clone)
+    end
+
     test "a request too big for one POST, probed first", %{tmp_dir: tmp_dir} do
       source = Seed.source!(tmp_dir)
       Seed.commit!(source, "file", "one\n")

@@ -12,6 +12,10 @@ defmodule GitServer.Config do
     (default 50 MB).
   - `:max_delta_depth`: the longest delta chain, in a push or a stored pack
     (default 100).
+  - `:max_fetch_work_bytes`: how much work one fetch may spend re-resolving delta
+    bases its object cache couldn't keep, in bytes inflated and produced (default
+    1 GB). The objects sent never count, only the bases under them, so this bounds a
+    pack built to make every clone walk long delta chains.
   - `:max_request_bytes`: the largest upload-pack request body, raw and inflated
     (default 10 MB).
   - `:max_command_bytes`: the largest command section of a push (default 1 MB).
@@ -33,6 +37,7 @@ defmodule GitServer.Config do
     max_objects: 100_000,
     max_object_bytes: 50_000_000,
     max_delta_depth: 100,
+    max_fetch_work_bytes: 1_000_000_000,
     max_request_bytes: 10_000_000,
     max_command_bytes: 1_000_000,
     push_deadline_ms: 15_000,

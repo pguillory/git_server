@@ -8,6 +8,10 @@ defmodule GitServer.Pack.Reader do
   chain is walked iteratively down to a whole object (or a cached one) and then
   applied back up, so the working set is one base and one result plus the cache.
 
+  `budget` is charged for all the work of a read, and `base_budget` only for the
+  work of resolving the bases under the object read: inflating them and applying
+  their deltas, which the cache would have saved. Either may be nil.
+
   Errors are thrown as `{:pack_error, reason}`, and a REF_DELTA base that `ref` can't
   find as `{:missing_base, id}`; callers turn them into `{:error, reason}`.
   """
@@ -19,19 +23,20 @@ defmodule GitServer.Pack.Reader do
   @max_header 40
 
   @enforce_keys [:fd, :ends, :ref, :cache, :max_object_bytes, :max_delta_depth]
-  defstruct [:key, :budget | @enforce_keys]
+  defstruct [:key, :budget, :base_budget | @enforce_keys]
 
   @doc false
   # A budget of bytes inflated and produced by deltas, shared by everything that
-  # charges it. `nil` means unlimited.
-  def new_budget(max), do: {:counters.new(1, []), max}
+  # charges it, failing with `message` once spent. `nil` means unlimited.
+  def new_budget(max, message \\ "pack needs too much work to index"),
+    do: {:counters.new(1, []), max, message}
 
   @doc false
   def charge(nil, _bytes), do: :ok
 
-  def charge({ref, max}, bytes) do
+  def charge({ref, max, message}, bytes) do
     :counters.add(ref, 1, bytes)
-    if :counters.get(ref, 1) > max, do: fail("pack needs too much work to index")
+    if :counters.get(ref, 1) > max, do: fail(message)
     :ok
   end
 
@@ -89,7 +94,12 @@ defmodule GitServer.Pack.Reader do
         case e.kind do
           {:base, type} ->
             content = inflate(r, e)
-            if deltas != [], do: Cache.put(r.cache, {r.key, offset}, {type, content, 0}, e.size)
+
+            if deltas != [] do
+              charge(r.base_budget, inflate_work(e))
+              Cache.put(r.cache, {r.key, offset}, {type, content, 0}, e.size)
+            end
+
             apply_chain(r, type, content, 0, deltas)
 
           _delta ->
@@ -116,12 +126,18 @@ defmodule GitServer.Pack.Reader do
     end
   end
 
+  # `deltas` runs from the one nearest the base to the object read, the last.
   defp apply_chain(r, type, content, depth, deltas) do
+    last = length(deltas) - 1
+
     {type, content, _depth} =
-      Enum.reduce(deltas, {type, content, depth}, fn e, {type, base, depth} ->
+      deltas
+      |> Enum.with_index()
+      |> Enum.reduce({type, content, depth}, fn {e, n}, {type, base, depth} ->
         case Delta.apply(base, inflate(r, e), r.max_object_bytes) do
           {:ok, result} ->
             charge(r.budget, byte_size(result))
+            if n < last, do: charge(r.base_budget, inflate_work(e) + byte_size(result))
             Cache.put(r.cache, {r.key, e.offset}, {type, result, depth + 1}, byte_size(result))
             {type, result, depth + 1}
 
@@ -138,8 +154,7 @@ defmodule GitServer.Pack.Reader do
   its declared size.
   """
   def inflate(%__MODULE__{} = r, e) do
-    # zlib's work follows its input as well as its output (empty stored blocks).
-    charge(r.budget, max(e.size, e.stop - e.start))
+    charge(r.budget, inflate_work(e))
 
     with_inflater(fn z ->
       out = inflate_range(r.fd, z, e.start, e.stop, e.size, 0, [])
@@ -147,6 +162,9 @@ defmodule GitServer.Pack.Reader do
       out
     end)
   end
+
+  # zlib's work follows its input as well as its output (empty stored blocks).
+  defp inflate_work(e), do: max(e.size, e.stop - e.start)
 
   defp inflate_range(_fd, _z, pos, stop, size, size, acc) when pos >= stop,
     do: IO.iodata_to_binary(Enum.reverse(acc))

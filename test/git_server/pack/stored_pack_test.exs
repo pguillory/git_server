@@ -35,6 +35,25 @@ defmodule GitServer.Pack.StoredPackTest do
     assert ObjectDB.read(db, id2) == {:ok, :blob, "brand new"}
   end
 
+  test "the base work budget charges only the bases under the object read", %{tmp_dir: dir} do
+    a = String.duplicate("a", 1000)
+    id = GitServer.Object.id(:blob, String.duplicate("b", 1000))
+
+    entries = [
+      object(:blob, a),
+      ofs_delta(id, 0, insert_delta(1000, String.duplicate("b", 1000))),
+    ]
+
+    # With no cache, every read of the delta inflates its 1000-byte base again.
+    {:ok, db} = open(dir, entries, max_base_work_bytes: 2500, cache_bytes: 0)
+    base = GitServer.Object.id(:blob, a)
+
+    for _ <- 1..5, do: assert(ObjectDB.read(db, base) == {:ok, :blob, a})
+    assert {:ok, :blob, _} = ObjectDB.read(db, id)
+    assert {:ok, :blob, _} = ObjectDB.read(db, id)
+    assert ObjectDB.read(db, id) == {:error, "too much work resolving delta bases"}
+  end
+
   test "a REF_DELTA whose base isn't in the pack", %{tmp_dir: dir} do
     id = :binary.copy(<<1>>, 20)
     {:ok, db} = open(dir, [ref_delta(id, :binary.copy(<<2>>, 20), insert_delta(1, "a"))])

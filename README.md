@@ -107,6 +107,10 @@ bodies unread.
 
 The pack size and object count limit what a push may send; a pack already stored is
 read whatever its size and count.
+- `:max_fetch_work_bytes`: how much work one fetch may spend re-resolving delta bases
+  its object cache couldn't keep, in bytes inflated and produced. The objects sent never
+  count, only the bases under them, so a legal history of large blobs never trips it, but
+  a pack built to make every clone walk long delta chains does. Default 1 GB.
 - `:max_request_bytes`: the largest upload-pack request body, raw and inflated. Default
   10 MB.
 - `:max_command_bytes`: the largest command section of a push. Default 1 MB.

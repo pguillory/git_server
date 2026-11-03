@@ -12,6 +12,10 @@ defmodule GitServer.ObjectDB do
     * `:max_object_bytes` - the largest object (or delta) to inflate (default 50 MB)
     * `:max_delta_depth` - the longest delta chain to follow (default 100)
     * `:cache_bytes` - the size of the resolved-base cache (default 32 MB)
+    * `:max_base_work_bytes` - bytes inflated and produced by deltas, across every
+      read, in resolving delta bases under the objects read: what the cache misses
+      cost, never the work of producing the objects themselves. Past it, reads fail
+      with `"too much work resolving delta bases"` (default unlimited)
     * `:log_label` - when given, such as `"repository alice/notes"`, every error
       opening or reading a pack is also logged at error level with this label, the
       pack's file name and the reason, never object content (default none)
@@ -30,6 +34,7 @@ defmodule GitServer.ObjectDB do
     max_object_bytes: 50_000_000,
     max_delta_depth: 100,
     cache_bytes: 32_000_000,
+    max_base_work_bytes: nil,
     log_label: nil,
   ]
 
@@ -45,6 +50,14 @@ defmodule GitServer.ObjectDB do
   def open(packs, opts \\ []) do
     opts = Keyword.merge(@defaults, opts)
     cache = Cache.new(opts[:cache_bytes])
+
+    opts =
+      Keyword.put(
+        opts,
+        :base_budget,
+        opts[:max_base_work_bytes] &&
+          Reader.new_budget(opts[:max_base_work_bytes], "too much work resolving delta bases")
+      )
 
     result =
       packs
@@ -91,6 +104,7 @@ defmodule GitServer.ObjectDB do
             ends: ends,
             ref: &Idx.offset(idx, &1),
             cache: cache,
+            base_budget: opts[:base_budget],
             max_object_bytes: opts[:max_object_bytes],
             max_delta_depth: opts[:max_delta_depth],
           }
