@@ -13,6 +13,8 @@
 #   --clones 5           clones from a fresh directory at each point
 #   --real-until 100     every push up to here goes through git
 #   --timed-pushes 3     pushes through git just before each later point, and timed
+#   --pack-cache MODE    serve with a pack cache: "cold" empties it before each clone,
+#                        "warm" fills it with an untimed clone first (default no cache)
 #
 # Clones and timed pushes always use the real git client, against the server on
 # loopback. Between them, to save hours, the other pushes are a shortcut that writes
@@ -99,13 +101,22 @@ defmodule CloneCurve do
   def main(args) do
     {opts, _rest} =
       OptionParser.parse!(args,
-        strict: [points: :string, clones: :integer, real_until: :integer, timed_pushes: :integer]
+        strict: [
+          points: :string,
+          clones: :integer,
+          real_until: :integer,
+          timed_pushes: :integer,
+          pack_cache: :string,
+        ]
       )
 
     points =
       (opts[:points] || "1,10,100,500,1000,2000,3000")
       |> String.split(",")
       |> Enum.map(&String.to_integer/1)
+
+    unless opts[:pack_cache] in [nil, "cold", "warm"],
+      do: raise(ArgumentError, "--pack-cache is cold or warm")
 
     work = Path.join(System.tmp_dir!(), "git_server-curve-#{random()}")
     File.mkdir_p!(work)
@@ -117,11 +128,13 @@ defmodule CloneCurve do
       real_until: opts[:real_until] || 100,
       timed_pushes: opts[:timed_pushes] || 3,
       git_env: git_env(work),
+      pack_cache: opts[:pack_cache],
+      cache_dir: Path.join(work, "pack-cache"),
     }
 
     inner = inner_store()
     store = CountingStore.wrap(inner)
-    run = Map.merge(run, %{store: store, url: serve(store)})
+    run = Map.merge(run, %{store: store, url: serve(store, run.pack_cache && run.cache_dir)})
 
     try do
       git!(run, ["init", "-q", "-b", "main", run.local], work)
@@ -154,7 +167,7 @@ defmodule CloneCurve do
 
   defp random, do: Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
-  defp serve(store) do
+  defp serve(store, cache_dir) do
     authorize = fn
       %{credentials: {"curve", "curve"}} -> :ok
       _request -> :unauthorized
@@ -162,7 +175,7 @@ defmodule CloneCurve do
 
     {:ok, pid} =
       Bandit.start_link(
-        plug: {GitServer.Plug, store: store, authorize: authorize},
+        plug: {GitServer.Plug, store: store, authorize: authorize, pack_cache_dir: cache_dir},
         scheme: :http,
         ip: {127, 0, 0, 1},
         port: 0,
@@ -312,8 +325,12 @@ defmodule CloneCurve do
   defp measure_clones(run, target) do
     head = run |> git!(["rev-parse", "HEAD"], run.local) |> String.trim()
 
+    if run.pack_cache == "warm",
+      do: git!(run, ["clone", "-q", run.url, Path.join(run.work, "warm-#{target}")], run.work)
+
     for n <- 1..run.clones do
       dir = Path.join(run.work, "clone-#{target}-#{n}")
+      if run.pack_cache == "cold", do: File.rm_rf!(run.cache_dir)
       before = CountingStore.read(run.store)
       started = System.monotonic_time(:millisecond)
       {output, status} = git(run, ["clone", "-q", run.url, dir], run.work)

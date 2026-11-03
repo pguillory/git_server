@@ -15,7 +15,9 @@ defmodule GitServer.Repository do
   calls.
   """
 
-  alias GitServer.{Failure, RepoName, State, Store}
+  require Logger
+
+  alias GitServer.{Failure, PackCache, RepoName, State, Store}
 
   defmodule Snapshot do
     @moduledoc """
@@ -25,7 +27,7 @@ defmodule GitServer.Repository do
     object.
     """
     @enforce_keys [:store, :repo, :dir, :state, :etag, :packs]
-    defstruct [:concurrency | @enforce_keys]
+    defstruct [:concurrency, :cache | @enforce_keys]
   end
 
   @doc "The store key of a repository's state."
@@ -74,10 +76,14 @@ defmodule GitServer.Repository do
 
   Files are downloaded `:concurrency` at a time (default 8), here and in
   `refresh/1`. The first failed download stops the others, and a file stopped part
-  way never stands under its final name.
+  way never stands under its final name. With `cache: {dir, max_bytes}`, packs come
+  from that `GitServer.PackCache` when it has them, and downloaded ones go into it;
+  a cache directory that can't be created is logged and the snapshot goes on
+  without it.
   """
   def snapshot(store, repo, temp_dir, opts \\ []) do
-    with {:ok, dir} <- private_dir(temp_dir) do
+    with {:ok, cache} <- open_cache(opts[:cache], store),
+         {:ok, dir} <- private_dir(temp_dir) do
       result =
         try do
           with {:ok, state, etag} <- read_state(store, repo) do
@@ -89,6 +95,7 @@ defmodule GitServer.Repository do
               etag: etag,
               packs: [],
               concurrency: Keyword.get(opts, :concurrency, 8),
+              cache: cache,
             }
 
             download(snapshot, state, etag)
@@ -101,6 +108,20 @@ defmodule GitServer.Repository do
 
       with {:error, _} <- result, do: File.rm_rf(dir)
       result
+    end
+  end
+
+  # A cache that can't be used doesn't fail the request, which goes on without it.
+  defp open_cache(nil, _store), do: {:ok, nil}
+
+  defp open_cache({dir, max_bytes}, store) do
+    case PackCache.open(dir, max_bytes, store) do
+      {:ok, cache} ->
+        {:ok, cache}
+
+      {:error, reason} ->
+        Logger.warning("git_server: #{reason}")
+        {:ok, nil}
     end
   end
 
@@ -181,9 +202,19 @@ defmodule GitServer.Repository do
     end
   end
 
-  # Only files not already in the directory, from before a refresh, are downloaded.
+  # Only files not already in the directory, from before a refresh, or in the cache
+  # are downloaded.
   defp download(snapshot, state, etag) do
     paths = Map.new(state.packs, &{&1, pack_paths(snapshot, &1)})
+
+    if snapshot.cache do
+      Enum.each(state.packs, fn name ->
+        {pack_path, idx_path} = paths[name]
+
+        if not File.exists?(pack_path) and not File.exists?(idx_path),
+          do: PackCache.take(snapshot.cache, pack_key(snapshot.repo, name), pack_path, idx_path)
+      end)
+    end
 
     files =
       for name <- state.packs,
@@ -215,13 +246,38 @@ defmodule GitServer.Repository do
         {:exit, _reason} -> {:error, "the store download exited"}
       end)
 
-    case failure do
-      nil ->
-        {:ok, %{snapshot | state: state, etag: etag, packs: Enum.map(state.packs, &paths[&1])}}
+    downloaded = files |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
 
-      {:error, reason} ->
-        {:error, reason}
+    with nil <- failure,
+         :ok <- cache_downloads(snapshot, downloaded, paths) do
+      {:ok, %{snapshot | state: state, etag: etag, packs: Enum.map(state.packs, &paths[&1])}}
     end
+  end
+
+  # A pack that fails the cache's checks is a storage error, and its files go, so a
+  # later refresh doesn't take them as present.
+  defp cache_downloads(%Snapshot{cache: nil}, _names, _paths), do: :ok
+  defp cache_downloads(_snapshot, [], _paths), do: :ok
+
+  defp cache_downloads(snapshot, names, paths) do
+    result =
+      Enum.find_value(names, :ok, fn name ->
+        {pack_path, idx_path} = paths[name]
+        key = pack_key(snapshot.repo, name)
+
+        case PackCache.insert(snapshot.cache, key, name, pack_path, idx_path) do
+          :ok ->
+            nil
+
+          {:error, reason} ->
+            File.rm(pack_path)
+            File.rm(idx_path)
+            {:error, "repository #{snapshot.repo}: pack #{name}: #{reason}"}
+        end
+      end)
+
+    PackCache.evict(snapshot.cache)
+    result
   end
 
   defp pack_paths(snapshot, name),

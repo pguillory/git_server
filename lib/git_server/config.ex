@@ -37,6 +37,13 @@ defmodule GitServer.Config do
     positive integer (default 8). A fetch or push downloads every pack and idx the
     repository lists. Each download holds a store connection, and the S3 store's
     connection pool holds 50 per endpoint, a request waiting at most 5 s for one.
+  - `:pack_cache_dir`: a directory for a local cache of stored packs, so a fetch or
+    push downloads only packs it hasn't seen (default none: no cache). See
+    `GitServer.PackCache`. Made private to this user if it doesn't exist; it must be
+    private to this user and hold nothing else, and not be named `git_server-*`, the
+    name of request directories. If it can't be used, requests log it and go on
+    without the cache.
+  - `:pack_cache_bytes`: the size the cache is kept under (default 1 GB).
   """
 
   @enforce_keys [:store, :authorize, :temp_dir]
@@ -54,6 +61,8 @@ defmodule GitServer.Config do
     after_update: nil,
     after_update_timeout_ms: 30_000,
     download_concurrency: 8,
+    pack_cache_dir: nil,
+    pack_cache_bytes: 1_000_000_000,
   ]
   defstruct @enforce_keys ++ @defaults
   @fields @enforce_keys ++ Keyword.keys(@defaults)
@@ -103,6 +112,7 @@ defmodule GitServer.Config do
     :max_fetch_work_bytes,
     :max_request_bytes,
     :max_command_bytes,
+    :pack_cache_bytes,
   ]
   @durations [:push_deadline_ms, :before_update_timeout_ms, :after_update_timeout_ms]
 
@@ -142,6 +152,14 @@ defmodule GitServer.Config do
       not (opts[:temp_dir] == nil or is_binary(opts[:temp_dir])) ->
         {:error, "GitServer.Plug's :temp_dir must be a path"}
 
+      not (opts[:pack_cache_dir] == nil or
+               (is_binary(opts[:pack_cache_dir]) and
+                  not String.starts_with?(
+                    Path.basename(Path.expand(opts[:pack_cache_dir])),
+                    "git_server-"
+                  ))) ->
+        {:error, "GitServer.Plug's :pack_cache_dir must be a path not named git_server-*"}
+
       true ->
         {:ok, struct!(__MODULE__, %{opts | temp_dir: opts[:temp_dir] || System.tmp_dir!()})}
     end
@@ -167,6 +185,15 @@ defmodule GitServer.Config do
       max_object_bytes: config.max_object_bytes,
       max_delta_depth: config.max_delta_depth,
     ]
+  end
+
+  @doc """
+  The options for `GitServer.Repository.snapshot/4`: download concurrency and the
+  pack cache.
+  """
+  def snapshot_options(%__MODULE__{} = config) do
+    cache = if config.pack_cache_dir, do: {config.pack_cache_dir, config.pack_cache_bytes}
+    [concurrency: config.download_concurrency, cache: cache]
   end
 
   @doc """

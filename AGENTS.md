@@ -57,6 +57,8 @@ supplies the store configuration and an `authorize` callback, and holds every se
   state write, `update` (the retry loop every state writer goes through: compute,
   write conditionally, refresh and compute again on a lost race, up to a deadline),
   and snapshots (the listed packs downloaded, several at once, to a temp directory).
+  `GitServer.PackCache`: the optional local cache of stored packs snapshots take from
+  and add to: checked on insert, hard-linked out, evicted by file.
 - `GitServer.ReceivePack`: push, the receive-pack advertisement and request side:
   reading and parsing the commands, the probe, the pack streamed to a file (or an
   oversized one drained), and report-status, then the host's `after_update`. `GitServer.ReceivePack.Update`: the push itself: the pack indexed and

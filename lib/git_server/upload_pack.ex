@@ -438,7 +438,7 @@ defmodule GitServer.UploadPack do
         config.store,
         repo,
         config.temp_dir,
-        [concurrency: config.download_concurrency],
+        Config.snapshot_options(config),
         fn snapshot ->
           with {:ok, db} <-
                  ObjectDB.open(snapshot.packs, Config.read_options(config, repo, fetch: true)) do

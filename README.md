@@ -126,6 +126,10 @@ bodies unread.
   download holds a store connection, and the S3 store's pool holds 50 per endpoint, a
   request waiting at most 5 s for one, so this times the number of requests at once
   should stay under 50. Default 8.
+- `:pack_cache_dir`: a directory for a local cache of stored packs, so a fetch or push
+  downloads only the packs it hasn't seen. Worth it for a remote store; see "Storage"
+  below. Default none (no cache).
+- `:pack_cache_bytes`: the size the pack cache is kept under. Default 1 GB.
 
 The pack size and object count limit what a push may send; a pack already stored is
 read whatever its size and count.
@@ -301,8 +305,24 @@ packs/<checksum>.idx   its index in git's own idx v2 format, immutable
 
 A push writes at most these three objects, however many git objects it holds. Listing
 refs reads only `state`. A fetch or a push also downloads every listed pack and index to
-temporary files, deleted when the request ends, so it costs about 1 + 2 × packs GETs.
-Nothing compacts packs or caches them yet.
+temporary files, deleted when the request ends, so without the pack cache it costs about
+1 + 2 × packs GETs, `:download_concurrency` at a time. Nothing compacts packs yet.
+
+With `:pack_cache_dir`, downloaded packs and indexes are also kept in that directory, so
+a request downloads only packs it hasn't seen and a warm fetch reads only `state`. A
+pack's key names its checksum and a stored pack never changes, so an entry is never
+stale; each one is checked (the pack's SHA-1 against its trailer and name, the index's
+own checksum, and the two against each other) before it goes in. The directory is made
+private to this user if it doesn't exist, must be private to it and hold nothing else,
+may be shared by servers running as that user, and has its least recently used entries
+removed once it passes `:pack_cache_bytes`. If it can't be used, requests log that and
+go on without it. Requests take entries by hard link, so the
+cache works best on the same file system as `:temp_dir` (otherwise each is copied).
+
+The cache pays off when the store is remote: on R2, a warm clone of a repository with
+100 pushes took 0.6 s against 5 s without it. Its own cost is a few file-system calls per
+pack (links and renames, about 1 ms per pack warm and 3 ms cold on a Mac), so for a store
+on the same machine, such as MinIO on loopback, it makes clones slower, not faster.
 
 ### Guarantees
 

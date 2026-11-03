@@ -117,8 +117,11 @@ defmodule GitServer.ReceivePack.Update do
     if Enum.all?(commands, & &1.error) do
       {:ok, commands}
     else
-      case Repository.snapshot(config.store, repo, config.temp_dir,
-             concurrency: config.download_concurrency
+      case Repository.snapshot(
+             config.store,
+             repo,
+             config.temp_dir,
+             Config.snapshot_options(config)
            ) do
         {:ok, snapshot} ->
           try do

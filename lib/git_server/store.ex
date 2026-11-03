@@ -63,7 +63,11 @@ defmodule GitServer.Store do
     mod.list(config, prefix)
   end
 
-  @doc "A description of the store for logs: its kind and location, never a secret."
+  @doc """
+  A description of the store for logs: its kind and location, never a secret. It also
+  names the store in `GitServer.PackCache`, so two stores holding different objects
+  must describe themselves differently.
+  """
   def describe({mod, config}) do
     mod.describe(config)
   end
