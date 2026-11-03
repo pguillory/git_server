@@ -179,7 +179,7 @@ defmodule GitServer.Plug do
         PktLine.encode("version 2\n"),
         PktLine.encode("agent=#{HTTP.agent()}\n"),
         PktLine.encode("ls-refs=unborn\n"),
-        PktLine.encode("fetch\n"),
+        PktLine.encode("fetch=shallow\n"),
         PktLine.encode("object-format=sha1\n"),
         PktLine.flush(),
       ])

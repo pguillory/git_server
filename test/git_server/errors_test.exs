@@ -282,4 +282,17 @@ defmodule GitServer.ErrorsTest do
     {output, 128} = git(["fetch", "origin", orphan], cd: clone)
     assert output =~ "fatal: remote error: upload-pack: not our ref #{orphan}\n"
   end
+
+  test "shallow clones the server can't make", %{tmp_dir: tmp_dir} do
+    server = TestServer.start!()
+    pushed!(server, tmp_dir)
+    url = TestServer.url(server, "repo")
+
+    {output, 128} = git(["clone", "--shallow-exclude", "main", url, Path.join(tmp_dir, "a")])
+    assert output =~ "fatal: remote error: deepen-not (--shallow-exclude) is not supported\n"
+
+    # Every commit is older than that (2096).
+    {output, 128} = git(["clone", "--shallow-since", "@4000000000", url, Path.join(tmp_dir, "b")])
+    assert output =~ "fatal: remote error: no commits selected for shallow requests\n"
+  end
 end

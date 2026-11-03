@@ -8,7 +8,9 @@ defmodule GitServer.UploadPack do
   the haves the repository contains, as a pack of whole objects streamed on side-band
   1. Wants must be reachable from the current refs. Without `done`, any known have
   makes the server `ready`, which may send more than git's own upload-pack would but
-  is always correct.
+  is always correct. Shallow fetches (`shallow`, `deepen`, `deepen-relative`,
+  `deepen-since`) follow git's upload-pack (see `GitServer.Shallow`); `deepen-not` is
+  refused.
 
   An error before the response starts is an `ERR` packet, which git prints as
   `fatal: remote error: <text>`: a POST's HTTP error status reaches the user only as
@@ -18,10 +20,23 @@ defmodule GitServer.UploadPack do
   """
 
   import Plug.Conn, only: [chunk: 2]
-  alias GitServer.{Config, HTTP, Object, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
+
+  alias GitServer.{
+    Config,
+    HTTP,
+    Object,
+    ObjectDB,
+    ObjectId,
+    ObjectWalk,
+    PktLine,
+    Repository,
+    Shallow
+  }
+
   alias GitServer.Pack.Writer
 
   @service "git-upload-pack"
+  @max_depth Shallow.max_depth()
 
   @doc """
   Answers a v2 request body: `command=<name>`, capabilities, a delim, arguments, a
@@ -205,7 +220,15 @@ defmodule GitServer.UploadPack do
   # thin-pack and ofs-delta only permit what we never send, and git follows tags with
   # a fetch of its own when include-tag goes unanswered.
   defp fetch_request(arguments) do
-    initial = %{wants: [], haves: [], done: false}
+    initial = %{
+      wants: [],
+      haves: [],
+      done: false,
+      shallows: [],
+      depth: nil,
+      relative: false,
+      since: nil,
+    }
 
     result =
       Enum.reduce_while(arguments, {:ok, initial}, fn
@@ -218,6 +241,30 @@ defmodule GitServer.UploadPack do
         "done", {:ok, request} ->
           {:cont, {:ok, %{request | done: true}}}
 
+        "shallow " <> hex, {:ok, request} ->
+          add_id(request, :shallows, hex, "shallow")
+
+        "deepen " <> n, {:ok, request} ->
+          case parse_number(n, 10) do
+            {:ok, depth} when depth >= 1 and depth <= @max_depth ->
+              {:cont, {:ok, %{request | depth: depth}}}
+
+            _ ->
+              {:halt, {:error, "invalid deepen #{inspect(n)}"}}
+          end
+
+        "deepen-relative", {:ok, request} ->
+          {:cont, {:ok, %{request | relative: true}}}
+
+        "deepen-since " <> time, {:ok, request} ->
+          case parse_number(time, 19) do
+            {:ok, since} -> {:cont, {:ok, %{request | since: since}}}
+            :error -> {:halt, {:error, "invalid deepen-since #{inspect(time)}"}}
+          end
+
+        "deepen-not " <> _, _ ->
+          {:halt, {:error, "deepen-not (--shallow-exclude) is not supported"}}
+
         ignored, {:ok, request} when ignored in ~w(thin-pack no-progress include-tag ofs-delta) ->
           {:cont, {:ok, request}}
 
@@ -229,8 +276,17 @@ defmodule GitServer.UploadPack do
       {:ok, %{wants: []}} ->
         {:error, "fetch needs at least one want"}
 
+      {:ok, %{depth: depth, since: since}} when depth != nil and since != nil ->
+        {:error, "deepen and deepen-since cannot be used together"}
+
       {:ok, request} ->
-        {:ok, %{request | wants: Enum.uniq(request.wants), haves: Enum.uniq(request.haves)}}
+        {:ok,
+         %{
+           request
+           | wants: Enum.uniq(request.wants),
+             haves: Enum.uniq(request.haves),
+             shallows: request.shallows |> Enum.reverse() |> Enum.uniq(),
+         }}
 
       error ->
         error
@@ -244,20 +300,41 @@ defmodule GitServer.UploadPack do
     end
   end
 
+  # A decimal number of at most `digits` digits.
+  defp parse_number(text, digits) do
+    if byte_size(text) <= digits and String.match?(text, ~r/\A[0-9]+\z/),
+      do: {:ok, String.to_integer(text)},
+      else: :error
+  end
+
   defp negotiate(conn, state, db, request) do
     common = Enum.filter(request.haves, &ObjectDB.member?(db, &1))
 
-    case check_wants(db, state, request.wants) do
-      :ok when request.done -> send_pack(conn, db, request.wants, common, [])
-      :ok when common != [] -> send_pack(conn, db, request.wants, common, acknowledgments(common))
-      :ok -> HTTP.result(conn, @service, nak())
+    with {:ok, shallows} <- Shallow.client_shallows(db, request.shallows),
+         :ok <- check_wants(db, state, request.wants) do
+      request = %{request | shallows: shallows}
+
+      cond do
+        request.done -> send_pack(conn, state, db, request, common, [])
+        common != [] -> send_pack(conn, state, db, request, common, acknowledgments(common))
+        true -> HTTP.result(conn, @service, nak())
+      end
+    else
       {:error, reason} -> error(conn, reason)
     end
   end
 
-  defp objects(db, wants, common) do
-    with {:ok, excluded} <- ObjectWalk.reachable(db, common) do
-      ObjectWalk.reachable(db, wants, MapSet.new(excluded))
+  # Both walks stop at the shallow cut; an unshallowed commit's parents are wanted and
+  # the commit itself, which the client has, is not.
+  defp objects(db, wants, common, shallow) do
+    with {:ok, excluded} <-
+           ObjectWalk.reachable(db, common ++ shallow.unshallow, MapSet.new(), shallow.cut) do
+      ObjectWalk.reachable(
+        db,
+        wants ++ shallow.unshallow_parents,
+        MapSet.new(excluded),
+        shallow.cut
+      )
     end
   end
 
@@ -302,15 +379,30 @@ defmodule GitServer.UploadPack do
     ]
   end
 
+  defp shallow_info(%Shallow{info: false}), do: []
+
+  defp shallow_info(shallow) do
+    [
+      PktLine.encode("shallow-info\n"),
+      Enum.map(shallow.shallow, &PktLine.encode("shallow #{ObjectId.to_hex(&1)}\n")),
+      Enum.map(shallow.unshallow, &PktLine.encode("unshallow #{ObjectId.to_hex(&1)}\n")),
+      PktLine.delim(),
+    ]
+  end
+
   defp nak do
     [PktLine.encode("acknowledgments\n"), PktLine.encode("NAK\n"), PktLine.flush()]
   end
 
   # The object set is settled before the response starts, so a problem with it is
   # still an ERR packet. A client gone mid-pack needs no answer, just no more work.
-  defp send_pack(conn, db, wants, common, preamble) do
-    case objects(db, wants, common) do
-      {:ok, ids} -> stream_pack(conn, db, ids, preamble)
+  defp send_pack(conn, state, db, request, common, preamble) do
+    tips = state.refs |> Map.values() |> Enum.uniq() |> Enum.map(&tip_id/1)
+
+    with {:ok, shallow} <- Shallow.plan(db, tips, request.wants, request.shallows, request),
+         {:ok, ids} <- objects(db, request.wants, common, shallow) do
+      stream_pack(conn, db, ids, [preamble, shallow_info(shallow)])
+    else
       {:error, reason} -> error(conn, reason)
     end
   catch

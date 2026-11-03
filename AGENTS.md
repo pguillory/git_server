@@ -45,7 +45,9 @@ supplies the store configuration and an `authorize` callback, and holds every se
   an unlinked process, killed on timeout or when the caller dies.
 - `GitServer.UploadPack`: the v2 commands, `ls-refs` and `fetch`: negotiation, the want
   check, and the pack streamed on side-band 1. `GitServer.ObjectWalk`: reachability
-  over an object database.
+  over an object database, optionally cut at shallow commits. `GitServer.Shallow`: a
+  shallow fetch's boundary, `shallow` and `unshallow` lines, as git's upload-pack
+  computes them.
 - `GitServer.PktLine`: pkt-line and side-band framing. `GitServer.Body`: capped,
   gzip-aware request body reading, whole or streamed to a file, and draining the
   rest of an oversized body so the reply reaches git.

@@ -502,7 +502,7 @@ defmodule GitServer.UploadPackTest do
             {["want #{String.duplicate("z", 40)}"], "ERR malformed want"},
             {["want #{second}", "have abc"], "ERR malformed have"},
             {["want #{second}", "filter blob:none"], "ERR unsupported fetch argument"},
-            {["want #{second}", "deepen 1"], "ERR unsupported fetch argument"},
+            {["want #{second}", "deepen-not main"], "ERR deepen-not (--shallow-exclude)"},
             {["want #{second}", "sideband-all"], "ERR unsupported fetch argument"},
             {["want #{String.duplicate("1", 40)}", "done"], "ERR upload-pack: not our ref"},
           ] do

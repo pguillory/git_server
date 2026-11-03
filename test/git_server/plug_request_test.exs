@@ -131,7 +131,7 @@ defmodule GitServer.PlugRequestTest do
                 "version 2\n",
                 "agent=git_server/#{GitServer.version()}\n",
                 "ls-refs=unborn\n",
-                "fetch\n",
+                "fetch=shallow\n",
                 "object-format=sha1\n",
                 :flush,
               ]}
