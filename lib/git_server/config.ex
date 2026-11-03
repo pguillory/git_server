@@ -33,6 +33,10 @@ defmodule GitServer.Config do
     `GitServer.ReceivePack`.
   - `:after_update_timeout_ms`: how long one call of `:after_update` may run before
     it is killed (default 30 seconds).
+  - `:download_concurrency`: how many store downloads one request runs at once, a
+    positive integer (default 8). A fetch or push downloads every pack and idx the
+    repository lists. Each download holds a store connection, and the S3 store's
+    connection pool holds 50 per endpoint, a request waiting at most 5 s for one.
   """
 
   @enforce_keys [:store, :authorize, :temp_dir]
@@ -49,6 +53,7 @@ defmodule GitServer.Config do
     before_update_timeout_ms: 30_000,
     after_update: nil,
     after_update_timeout_ms: 30_000,
+    download_concurrency: 8,
   ]
   defstruct @enforce_keys ++ @defaults
   @fields @enforce_keys ++ Keyword.keys(@defaults)
@@ -126,6 +131,9 @@ defmodule GitServer.Config do
 
       not_count != [] ->
         {:error, "GitServer.Plug options must be non-negative integers: #{names(not_count)}"}
+
+      not (is_integer(opts[:download_concurrency]) and opts[:download_concurrency] >= 1) ->
+        {:error, "GitServer.Plug's :download_concurrency must be a positive integer"}
 
       not_duration != [] ->
         {:error,

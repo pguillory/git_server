@@ -121,6 +121,11 @@ bodies unread.
 - `:after_update`: a function called after a push lands. See below.
 - `:after_update_timeout_ms`: how long one call of `:after_update` may run before it is
   killed. Default 30 seconds.
+- `:download_concurrency`: how many store downloads one request runs at once, a positive
+  integer. A fetch or push downloads every pack and idx the repository lists. Each
+  download holds a store connection, and the S3 store's pool holds 50 per endpoint, a
+  request waiting at most 5 s for one, so this times the number of requests at once
+  should stay under 50. Default 8.
 
 The pack size and object count limit what a push may send; a pack already stored is
 read whatever its size and count.

@@ -85,6 +85,10 @@ defmodule GitServer.AuthorizeFailureTest do
            "GitServer.Plug options must be non-negative integers: :max_pack_bytes"},
           {fn -> [store: store, authorize: fn _ -> :ok end, push_deadline_ms: nil] end,
            "GitServer.Plug options must be integers of milliseconds: :push_deadline_ms"},
+          {fn -> [store: store, authorize: fn _ -> :ok end, download_concurrency: 0] end,
+           "GitServer.Plug's :download_concurrency must be a positive integer"},
+          {fn -> [store: store, authorize: fn _ -> :ok end, download_concurrency: nil] end,
+           "GitServer.Plug's :download_concurrency must be a positive integer"},
         ] do
       server = TestServer.start!(config: config)
 

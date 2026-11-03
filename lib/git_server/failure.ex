@@ -1,8 +1,9 @@
 defmodule GitServer.Failure do
   @moduledoc false
-  # Describes a host callback's failure for the server log without anything the
-  # failure carries: no exception message, thrown value, exit reason or call
-  # arguments, any of which may quote credentials or pushed content.
+  # Describes a host callback's failure, or a store call's in a task, for the server
+  # log without anything the failure carries: no exception message, thrown value,
+  # exit reason or call arguments, any of which may quote credentials or pushed
+  # content.
 
   @doc """
   The kind of a caught failure, an exception's module, and the stacktrace without
@@ -15,6 +16,16 @@ defmodule GitServer.Failure do
 
   def describe(:throw, _value, stacktrace), do: "threw\n" <> locations(stacktrace)
   def describe(:exit, _reason, stacktrace), do: "exited\n" <> locations(stacktrace)
+
+  @doc """
+  Runs `fun`, turning a raise, throw or exit into `{:error, "<what> <description>"}`,
+  for work run in a linked task, where a failure would otherwise exit the caller.
+  """
+  def catching(what, fun) do
+    fun.()
+  catch
+    kind, reason -> {:error, "#{what} " <> describe(kind, reason, __STACKTRACE__)}
+  end
 
   defp locations(stacktrace) do
     stacktrace

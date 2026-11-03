@@ -271,4 +271,22 @@ defmodule GitServer.ReceivePackTest do
     {_, 0} = git(["push", url, "main"], cd: local)
     assert state(server, "crash").refs == %{"refs/heads/main" => head}
   end
+
+  for suffix <- [".idx", ".pack"] do
+    test "a push whose #{suffix} upload fails lists nothing", %{tmp_dir: tmp_dir} do
+      store = FailingStore.wrap(GitServer.TestStore.fresh(), unquote(suffix), 1)
+      server = TestServer.start!(store: store)
+      local = init!(Path.join(tmp_dir, "local"))
+      commit!(local, "a", "a\n")
+
+      log =
+        capture_log(fn ->
+          {output, 1} = git(["push", TestServer.url(server, "r"), "main"], cd: local)
+          assert output =~ "main -> main (storage failed, try again later)"
+        end)
+
+      assert log =~ "injected failure"
+      assert Repository.read_state(store, "r") == {:ok, GitServer.State.new(), :absent}
+    end
+  end
 end

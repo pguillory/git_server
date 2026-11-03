@@ -117,7 +117,9 @@ defmodule GitServer.ReceivePack.Update do
     if Enum.all?(commands, & &1.error) do
       {:ok, commands}
     else
-      case Repository.snapshot(config.store, repo, config.temp_dir) do
+      case Repository.snapshot(config.store, repo, config.temp_dir,
+             concurrency: config.download_concurrency
+           ) do
         {:ok, snapshot} ->
           try do
             deadline = System.monotonic_time(:millisecond) + config.push_deadline_ms
@@ -423,10 +425,19 @@ defmodule GitServer.ReceivePack.Update do
     if name in snapshot.state.packs do
       {:ok, name}
     else
-      with {:ok, _} <-
-             Store.put_file(config.store, Repository.pack_key(snapshot.repo, name), path, :none),
-           {:ok, _} <-
-             Store.put(config.store, Repository.idx_key(snapshot.repo, name), pack.idx, :none) do
+      # Both at once: only the state write that lists them must come after both.
+      idx =
+        Task.async(fn ->
+          GitServer.Failure.catching("the store upload", fn ->
+            Store.put(config.store, Repository.idx_key(snapshot.repo, name), pack.idx, :none)
+          end)
+        end)
+
+      stored = Store.put_file(config.store, Repository.pack_key(snapshot.repo, name), path, :none)
+      idx_stored = Task.await(idx, :infinity)
+
+      with {:ok, _} <- stored,
+           {:ok, _} <- idx_stored do
         {:ok, name}
       end
     end

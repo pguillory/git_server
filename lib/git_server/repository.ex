@@ -6,16 +6,16 @@ defmodule GitServer.Repository do
       <name>.git/packs/<checksum>.pack
       <name>.git/packs/<checksum>.idx
 
-  `read_state/2` reads the state alone. `snapshot/3` also downloads every listed
+  `read_state/2` reads the state alone. `snapshot/4` also downloads every listed
   pack and idx into a fresh local directory, for reading objects; `release/1`
-  deletes it, and `with_snapshot/4` does both around a function. `put_state/4` is
+  deletes it, and `with_snapshot/5` does both around a function. `put_state/4` is
   the conditional state write, and `update/3` the loop every writer of a state goes
   through: compute the new state from a snapshot, write it conditionally, and on a
   lost race refresh and compute again. All of it uses only the store's generic
   calls.
   """
 
-  alias GitServer.{RepoName, State, Store}
+  alias GitServer.{Failure, RepoName, State, Store}
 
   defmodule Snapshot do
     @moduledoc """
@@ -25,7 +25,7 @@ defmodule GitServer.Repository do
     object.
     """
     @enforce_keys [:store, :repo, :dir, :state, :etag, :packs]
-    defstruct @enforce_keys
+    defstruct [:concurrency | @enforce_keys]
   end
 
   @doc "The store key of a repository's state."
@@ -71,8 +71,12 @@ defmodule GitServer.Repository do
   Reads the state and downloads every pack and idx it lists into a new directory
   under `temp_dir`: `{:ok, snapshot}` or `{:error, reason}`. The directory is gone
   again on error; on success the caller deletes it with `release/1`.
+
+  Files are downloaded `:concurrency` at a time (default 8), here and in
+  `refresh/1`. The first failed download stops the others, and a file stopped part
+  way never stands under its final name.
   """
-  def snapshot(store, repo, temp_dir) do
+  def snapshot(store, repo, temp_dir, opts \\ []) do
     with {:ok, dir} <- private_dir(temp_dir) do
       result =
         try do
@@ -84,6 +88,7 @@ defmodule GitServer.Repository do
               state: state,
               etag: etag,
               packs: [],
+              concurrency: Keyword.get(opts, :concurrency, 8),
             }
 
             download(snapshot, state, etag)
@@ -166,8 +171,8 @@ defmodule GitServer.Repository do
   Runs `fun` on a snapshot and deletes its files afterwards, even if `fun` raises:
   `fun`'s result, or `{:error, reason}` if the snapshot could not be made.
   """
-  def with_snapshot(store, repo, temp_dir, fun) do
-    with {:ok, snapshot} <- snapshot(store, repo, temp_dir) do
+  def with_snapshot(store, repo, temp_dir, opts \\ [], fun) do
+    with {:ok, snapshot} <- snapshot(store, repo, temp_dir, opts) do
       try do
         fun.(snapshot)
       after
@@ -176,38 +181,67 @@ defmodule GitServer.Repository do
     end
   end
 
+  # Only files not already in the directory, from before a refresh, are downloaded.
   defp download(snapshot, state, etag) do
-    result =
-      Enum.reduce_while(state.packs, {:ok, []}, fn name, {:ok, packs} ->
-        case fetch_pack(snapshot, name) do
-          {:ok, paths} -> {:cont, {:ok, [paths | packs]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
+    paths = Map.new(state.packs, &{&1, pack_paths(snapshot, &1)})
+
+    files =
+      for name <- state.packs,
+          {pack_path, idx_path} = paths[name],
+          {key, path} <- [
+            {idx_key(snapshot.repo, name), idx_path},
+            {pack_key(snapshot.repo, name), pack_path},
+          ],
+          not File.exists?(path),
+          do: {name, key, path}
+
+    # Halting the stream at the first failure stops the downloads still running. A
+    # task catches its own failures, so none exits this process.
+    %Snapshot{store: store, repo: repo} = snapshot
+
+    failure =
+      files
+      |> Task.async_stream(
+        fn file ->
+          Failure.catching("the store download", fn -> fetch_file(store, repo, file) end)
+        end,
+        max_concurrency: snapshot.concurrency,
+        ordered: false,
+        timeout: :infinity
+      )
+      |> Enum.find_value(fn
+        {:ok, :ok} -> nil
+        {:ok, {:error, reason}} -> {:error, reason}
+        {:exit, _reason} -> {:error, "the store download exited"}
       end)
 
-    with {:ok, packs} <- result do
-      {:ok, %{snapshot | state: state, etag: etag, packs: Enum.reverse(packs)}}
+    case failure do
+      nil ->
+        {:ok, %{snapshot | state: state, etag: etag, packs: Enum.map(state.packs, &paths[&1])}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  # A pack already in the directory, from before a refresh, is not downloaded again.
-  defp fetch_pack(snapshot, name) do
-    pack_path = Path.join(snapshot.dir, "#{name}.pack")
-    idx_path = Path.join(snapshot.dir, "#{name}.idx")
+  defp pack_paths(snapshot, name),
+    do: {Path.join(snapshot.dir, "#{name}.pack"), Path.join(snapshot.dir, "#{name}.idx")}
 
-    if File.exists?(pack_path) and File.exists?(idx_path) do
-      {:ok, {pack_path, idx_path}}
-    else
-      File.rm(pack_path)
-      File.rm(idx_path)
+  # Downloaded under a temporary name and renamed into place whole.
+  defp fetch_file(store, repo, {name, key, path}) do
+    part = path <> ".part"
+    File.rm(part)
 
-      with {:ok, _} <- Store.get_file(snapshot.store, idx_key(snapshot.repo, name), idx_path),
-           {:ok, _} <- Store.get_file(snapshot.store, pack_key(snapshot.repo, name), pack_path) do
-        {:ok, {pack_path, idx_path}}
-      else
-        {:error, :not_found} -> {:error, "repository #{snapshot.repo}: pack #{name} is missing"}
-        {:error, reason} -> {:error, reason}
-      end
+    case Store.get_file(store, key, part) do
+      {:ok, _etag} ->
+        with {:error, posix} <- File.rename(part, path),
+             do: {:error, "cannot rename a downloaded file: #{:file.format_error(posix)}"}
+
+      {:error, :not_found} ->
+        {:error, "repository #{repo}: pack #{name} is missing"}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

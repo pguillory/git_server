@@ -40,8 +40,8 @@ supplies the store configuration and an `authorize` callback, and holds every se
   dispatch of upload-pack (v2) and receive-pack (v0) requests. A failing `config`
   function or `authorize` is caught and refused with a 500. `GitServer.HTTP`: the responses the Plug and the
   protocol modules send (advertisements, results, text errors).
-- `GitServer.Failure`: a host callback's failure described for the log with nothing
-  it carries (no message, value or arguments). `GitServer.Worker`: runs a function in
+- `GitServer.Failure`: a host callback's or a store task's failure described for
+  the log with nothing it carries (no message, value or arguments). `GitServer.Worker`: runs a function in
   an unlinked process, killed on timeout or when the caller dies.
 - `GitServer.UploadPack`: the v2 commands, `ls-refs` and `fetch`: negotiation, the want
   check, and the pack streamed on side-band 1. `GitServer.ObjectWalk`: reachability
@@ -56,11 +56,11 @@ supplies the store configuration and an `authorize` callback, and holds every se
   pack list). `GitServer.Repository`: the store layout, state reads, the conditional
   state write, `update` (the retry loop every state writer goes through: compute,
   write conditionally, refresh and compute again on a lost race, up to a deadline),
-  and snapshots (the listed packs downloaded to a temp directory).
+  and snapshots (the listed packs downloaded, several at once, to a temp directory).
 - `GitServer.ReceivePack`: push, the receive-pack advertisement and request side:
   reading and parsing the commands, the probe, the pack streamed to a file (or an
   oversized one drained), and report-status, then the host's `after_update`. `GitServer.ReceivePack.Update`: the push itself: the pack indexed and
-  checked against the state, the pack stored, then the state published through
+  checked against the state, the pack and idx stored together, then the state published through
   `Repository.update`, with the host's `before_update` check run in its own process
   on every attempt, and `after_update` called once a push landed. `GitServer.Push`: what that check sees, and reading files at a
   commit (`list_files`, `read_file`).

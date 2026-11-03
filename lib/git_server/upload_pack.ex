@@ -434,16 +434,22 @@ defmodule GitServer.UploadPack do
   # afterwards whatever happens. `fun` sends the response.
   defp with_objects(conn, config, repo, fun) do
     result =
-      Repository.with_snapshot(config.store, repo, config.temp_dir, fn snapshot ->
-        with {:ok, db} <-
-               ObjectDB.open(snapshot.packs, Config.read_options(config, repo, fetch: true)) do
-          try do
-            fun.(snapshot, db)
-          after
-            ObjectDB.close(db)
+      Repository.with_snapshot(
+        config.store,
+        repo,
+        config.temp_dir,
+        [concurrency: config.download_concurrency],
+        fn snapshot ->
+          with {:ok, db} <-
+                 ObjectDB.open(snapshot.packs, Config.read_options(config, repo, fetch: true)) do
+            try do
+              fun.(snapshot, db)
+            after
+              ObjectDB.close(db)
+            end
           end
         end
-      end)
+      )
 
     case result do
       {:error, reason} -> storage_error(conn, reason)

@@ -6,6 +6,71 @@ defmodule GitServer.RepositoryTest do
   @a String.duplicate("a", 40)
   @b String.duplicate("b", 40)
 
+  defmodule GateStore do
+    @moduledoc """
+    Delegates to another store, but holds every download: it writes a few bytes of it,
+    sends `{:held, pid, key}` to `owner` and waits for `:go` (download the file) or
+    `:fail` (return an error).
+    """
+    @behaviour GitServer.Store
+    alias GitServer.Store
+
+    def wrap(store, owner), do: {__MODULE__, %{inner: store, owner: owner}}
+
+    @impl true
+    def get_file(config, key, path) do
+      File.write!(path, "part")
+      send(config.owner, {:held, self(), key})
+
+      receive do
+        :go ->
+          File.rm!(path)
+          Store.get_file(config.inner, key, path)
+
+        :fail ->
+          {:error, "injected failure"}
+      end
+    end
+
+    @impl true
+    def get(config, key), do: Store.get(config.inner, key)
+    @impl true
+    def put(config, key, body, condition), do: Store.put(config.inner, key, body, condition)
+    @impl true
+    def put_file(config, key, path, condition),
+      do: Store.put_file(config.inner, key, path, condition)
+
+    @impl true
+    def delete(config, key), do: Store.delete(config.inner, key)
+    @impl true
+    def list(config, prefix), do: Store.list(config.inner, prefix)
+    @impl true
+    def describe(config), do: "gate " <> Store.describe(config.inner)
+  end
+
+  defmodule RaisingStore do
+    @moduledoc "Delegates to another store, raising on every download."
+    @behaviour GitServer.Store
+    alias GitServer.Store
+
+    def wrap(store), do: {__MODULE__, store}
+
+    @impl true
+    def get_file(_inner, _key, _path), do: raise("boom")
+    @impl true
+    def get(inner, key), do: Store.get(inner, key)
+    @impl true
+    def put(inner, key, body, condition), do: Store.put(inner, key, body, condition)
+    @impl true
+    def put_file(inner, key, path, condition), do: Store.put_file(inner, key, path, condition)
+    @impl true
+    def delete(inner, key), do: Store.delete(inner, key)
+    @impl true
+    def list(inner, prefix), do: Store.list(inner, prefix)
+    @impl true
+    def describe(inner), do: "raising " <> Store.describe(inner)
+  end
+
   test "state reads and conditional writes" do
     store = GitServer.TestStore.fresh()
     assert Repository.read_state(store, "r") == {:ok, State.new(), :absent}
@@ -55,6 +120,94 @@ defmodule GitServer.RepositoryTest do
     assert File.read!(pack_b) == "pack #{@b}"
 
     assert Repository.release(refreshed) == :ok
+    assert File.ls!(tmp_dir) == []
+  end
+
+  defp put_packs!(store, names) do
+    for name <- names do
+      {:ok, _} = Store.put(store, Repository.pack_key("r", name), "pack #{name}", :none)
+      {:ok, _} = Store.put(store, Repository.idx_key("r", name), "idx #{name}", :none)
+    end
+  end
+
+  defp names(n), do: for(i <- 1..n, do: Base.encode16(<<i::160>>, case: :lower))
+
+  defp read_packs(snapshot),
+    do: for({pack, idx} <- snapshot.packs, do: {File.read!(pack), File.read!(idx)})
+
+  defp contents(names), do: for(name <- names, do: {"pack #{name}", "idx #{name}"})
+
+  @tag :tmp_dir
+  test "downloads a few files at a time, keeping the state's order", %{tmp_dir: tmp_dir} do
+    inner = GitServer.TestStore.fresh()
+    names = names(6)
+    put_packs!(inner, names)
+    {:ok, _} = Repository.put_state(inner, "r", %State{packs: names}, :absent)
+    store = GateStore.wrap(inner, self())
+
+    task = Task.async(fn -> Repository.snapshot(store, "r", tmp_dir, concurrency: 3) end)
+
+    held = for _ <- 1..3, do: assert_receive({:held, _, _}, 10_000)
+    refute_receive {:held, _, _}, 100
+
+    # Then let every download through.
+    for {:held, pid, _} <- held, do: send(pid, :go)
+
+    for _ <- 1..9 do
+      assert_receive {:held, pid, _}, 10_000
+      send(pid, :go)
+    end
+
+    refute_receive {:held, _, _}, 50
+
+    {:ok, snapshot} = Task.await(task)
+    assert read_packs(snapshot) == contents(names)
+    Repository.release(snapshot)
+  end
+
+  @tag :tmp_dir
+  test "a failed download stops the others and leaves no partial file", %{tmp_dir: tmp_dir} do
+    inner = GitServer.TestStore.fresh()
+    [first | _] = names = names(5)
+    put_packs!(inner, names)
+    {:ok, e1} = Repository.put_state(inner, "r", %State{packs: [first]}, :absent)
+    {:ok, snapshot} = Repository.snapshot(inner, "r", tmp_dir)
+    {:ok, _} = Repository.put_state(inner, "r", %State{packs: names}, e1)
+
+    gated = %{snapshot | store: GateStore.wrap(inner, self()), concurrency: 3}
+    task = Task.async(fn -> Repository.refresh(gated) end)
+    held = for _ <- 1..3, do: assert_receive({:held, _, _}, 10_000)
+    [{failing, _} | others] = for {:held, pid, key} <- held, do: {pid, key}
+    monitors = for {pid, _} <- others, do: Process.monitor(pid)
+
+    send(failing, :fail)
+    assert Task.await(task) == {:error, "injected failure"}
+    for ref <- monitors, do: assert_receive({:DOWN, ^ref, :process, _, _}, 10_000)
+    refute_received {:held, _, _}
+
+    # The stopped downloads left their bytes only under temporary names.
+    assert Enum.sort(File.ls!(snapshot.dir)) ==
+             Enum.sort(
+               ["#{first}.pack", "#{first}.idx"] ++
+                 for({:held, _, key} <- held, do: Path.basename(key) <> ".part")
+             )
+
+    {:ok, refreshed} = Repository.refresh(snapshot)
+    assert read_packs(refreshed) == contents(names)
+    Repository.release(refreshed)
+  end
+
+  @tag :tmp_dir
+  test "a download that raises fails the snapshot and leaves nothing behind", %{
+    tmp_dir: tmp_dir,
+  } do
+    inner = GitServer.TestStore.fresh()
+    put_packs!(inner, names(3))
+    {:ok, _} = Repository.put_state(inner, "r", %State{packs: names(3)}, :absent)
+
+    assert {:error, "the store download raised RuntimeError\n" <> _} =
+             Repository.snapshot(RaisingStore.wrap(inner), "r", tmp_dir)
+
     assert File.ls!(tmp_dir) == []
   end
 
