@@ -2,9 +2,9 @@
 
 A Git smart HTTP server for Elixir, as a Plug, that keeps every repository in an
 S3-compatible bucket (Cloudflare R2, MinIO, or any S3 API with conditional writes).
-Clone, fetch, pull and push work with the ordinary `git` client. There is no git
-binary on the server, no local repository and no database: the bucket is the whole
-state of the service.
+Clone, fetch, pull and push work with the ordinary `git` client, shallow clones
+included. There is no git binary on the server, no local repository and no database:
+the bucket is the whole state of the service.
 
 ## Trying it
 
@@ -244,7 +244,7 @@ slow work to a job queue.
 ## When something goes wrong
 
 What `git` prints for each failure (the tests check these lines, against real git for
-all but the last row). Git shows a server's message itself only on its first
+all but the `:max_request_bytes` row). Git shows a server's message itself only on its first
 request; after that, an HTTP error comes out as `error: RPC failed; HTTP 500` and
 nothing more, so failures after it are answered inside the protocol. The exceptions,
 still plain HTTP errors, are requests git itself doesn't send (malformed or truncated
@@ -272,6 +272,8 @@ ones), and a `config` or `authorize` that fails or refuses only on a later reque
 | A push whose ref commands are over `:max_command_bytes` (thousands of refs at once) | `error: remote unpack failed: too many ref commands (limit 1 MB)`, each ref then `(remote failed to report status)` |
 | A pushed delta chain over `:max_delta_depth` | `error: remote unpack failed: delta chain too deep (limit 100)` |
 | An upload-pack request over `:max_request_bytes` | `fatal: remote error: request too large (limit 10 MB)` |
+| `git clone --shallow-exclude` (or `fetch`) | `fatal: remote error: deepen-not (--shallow-exclude) is not supported` |
+| `--shallow-since` later than every commit | `fatal: remote error: no commits selected for shallow requests` (git's own message) |
 
 The server log keeps the reason for every storage failure; the client never sees store
 details. Limits show their configured values.
@@ -322,6 +324,9 @@ The store must support conditional PUT (`If-Match` and `If-None-Match: *`).
 These rest on the bucket's conditional writes being atomic. Tests cover them on MinIO,
 including two writers racing for one key.
 
+[docs/design.md](docs/design.md) compares this design with other Git-on-object-storage
+designs and says what it took from each.
+
 The server does not refuse a forced push: a client's `--force` replaces the branch. Use
 `authorize` to limit who may write, or `:before_update` to refuse rewrites.
 
@@ -334,7 +339,8 @@ changes.
 - SSH, `git://` and dumb HTTP. Smart HTTP only.
 - Fetching with protocol v0 or v1. Git has defaulted to v2 since 2.26 (2020); older
   clients get a message saying so.
-- Shallow clones (`--depth`), partial clones (`--filter`) and bundle URIs.
+- `--shallow-exclude`, partial clones (`--filter`) and bundle URIs. Other shallow
+  clones and fetches work (`--depth`, `--deepen`, `--shallow-since`, `--unshallow`).
 - SHA-256 repositories.
 - Push options, signed pushes and thin packs (the server tells clients not to send them).
 - Pack compaction and garbage collection of unlisted packs.
