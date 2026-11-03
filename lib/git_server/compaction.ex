@@ -27,8 +27,15 @@ defmodule GitServer.Compaction do
 
   require Logger
 
-  alias GitServer.{Config, ObjectId, PackCache, RepoName, Repository, Store}
-  alias GitServer.Pack.{Idx, Indexer, Merge}
+  alias GitServer.Config
+  alias GitServer.ObjectId
+  alias GitServer.PackCache
+  alias GitServer.RepoName
+  alias GitServer.Repository
+  alias GitServer.Store
+  alias GitServer.Pack.Idx
+  alias GitServer.Pack.Indexer
+  alias GitServer.Pack.Merge
 
   @defaults [max_packs: 8, max_compact_bytes: 1_000_000_000, max_compact_objects: 500_000]
 

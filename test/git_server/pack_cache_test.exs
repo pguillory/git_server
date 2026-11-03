@@ -3,8 +3,15 @@ defmodule GitServer.PackCacheTest do
   import ExUnit.CaptureLog
   import Bitwise
   import GitServer.TestGit
-  alias GitServer.{CountingStore, ObjectDB, Object, PackBuilder, PackCache, Repository, State}
-  alias GitServer.{Store, TestServer}
+  alias GitServer.CountingStore
+  alias GitServer.ObjectDB
+  alias GitServer.Object
+  alias GitServer.PackBuilder
+  alias GitServer.PackCache
+  alias GitServer.Repository
+  alias GitServer.State
+  alias GitServer.Store
+  alias GitServer.TestServer
   alias GitServer.Pack.Idx
 
   @moduletag :tmp_dir
@@ -21,7 +28,9 @@ defmodule GitServer.PackCacheTest do
     length(String.split(log, "\n", trim: true))
   end
 
-  defp cache_files(dir), do: dir |> File.ls!() |> Enum.sort()
+  defp cache_files(dir) do
+    dir |> File.ls!() |> Enum.sort()
+  end
 
   test "a warm clone reads only the state, and a cold one the same as with no cache", %{
     tmp_dir: tmp_dir,

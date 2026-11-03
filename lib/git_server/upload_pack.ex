@@ -21,17 +21,15 @@ defmodule GitServer.UploadPack do
 
   import Plug.Conn, only: [chunk: 2]
 
-  alias GitServer.{
-    Config,
-    HTTP,
-    Object,
-    ObjectDB,
-    ObjectId,
-    ObjectWalk,
-    PktLine,
-    Repository,
-    Shallow
-  }
+  alias GitServer.Config
+  alias GitServer.HTTP
+  alias GitServer.Object
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.ObjectWalk
+  alias GitServer.PktLine
+  alias GitServer.Repository
+  alias GitServer.Shallow
 
   alias GitServer.Pack.Writer
 
@@ -194,7 +192,9 @@ defmodule GitServer.UploadPack do
   end
 
   # A chain longer than the bound goes without, like an unreadable tag.
-  defp follow_tag(_db, _id, 0), do: nil
+  defp follow_tag(_db, _id, 0) do
+    nil
+  end
 
   defp follow_tag(db, id, n) do
     with {:ok, :tag, content} <- ObjectDB.read(db, id),
@@ -379,7 +379,9 @@ defmodule GitServer.UploadPack do
     ]
   end
 
-  defp shallow_info(%Shallow{info: false}), do: []
+  defp shallow_info(%Shallow{info: false}) do
+    []
+  end
 
   defp shallow_info(shallow) do
     [
@@ -467,12 +469,17 @@ defmodule GitServer.UploadPack do
     error(conn, "request too large (limit #{Config.format_bytes(config.max_request_bytes)})")
   end
 
-  def body_error(conn, :bad_gzip, _config), do: error(conn, "malformed gzip request body")
+  def body_error(conn, :bad_gzip, _config) do
+    error(conn, "malformed gzip request body")
+  end
 
-  def body_error(conn, :unsupported_encoding, _config),
-    do: error(conn, "unsupported Content-Encoding")
+  def body_error(conn, :unsupported_encoding, _config) do
+    error(conn, "unsupported Content-Encoding")
+  end
 
-  def body_error(conn, _reason, _config), do: error(conn, "could not read the request body")
+  def body_error(conn, _reason, _config) do
+    error(conn, "could not read the request body")
+  end
 
   # The reason is logged; the client hears only that storage failed.
   defp storage_error(conn, reason) do

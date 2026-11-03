@@ -25,7 +25,10 @@ defmodule GitServer.PackCache do
   stale `*.tmp-*` file in it.
   """
 
-  alias GitServer.{ObjectDB, ObjectId, Pack, Store}
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.Store
 
   defstruct [:dir, :max_bytes, :store_id]
 
@@ -183,7 +186,9 @@ defmodule GitServer.PackCache do
     end
   end
 
-  defp hash(_fd, pos, stop, state) when pos >= stop, do: {:ok, ObjectId.hash_final(state)}
+  defp hash(_fd, pos, stop, state) when pos >= stop do
+    {:ok, ObjectId.hash_final(state)}
+  end
 
   defp hash(fd, pos, stop, state) do
     case :file.pread(fd, pos, min(@chunk, stop - pos)) do

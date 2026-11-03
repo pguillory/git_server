@@ -38,6 +38,11 @@ defmodule GitServer.TestServer do
     String.replace(server.url, "http://", "http://#{user}:#{password}@") <> "/" <> repo
   end
 
-  defp authorize(%{credentials: {@user, @password}}), do: :ok
-  defp authorize(_request), do: :unauthorized
+  defp authorize(%{credentials: {@user, @password}}) do
+    :ok
+  end
+
+  defp authorize(_request) do
+    :unauthorized
+  end
 end

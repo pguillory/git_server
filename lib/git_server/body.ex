@@ -238,6 +238,11 @@ defmodule GitServer.Body do
     _exception -> :error
   end
 
-  defp write_result(:ok), do: :ok
-  defp write_result({:error, posix}), do: {:error, {:file, posix}}
+  defp write_result(:ok) do
+    :ok
+  end
+
+  defp write_result({:error, posix}) do
+    {:error, {:file, posix}}
+  end
 end

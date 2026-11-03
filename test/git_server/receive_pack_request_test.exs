@@ -6,7 +6,11 @@ defmodule GitServer.ReceivePackRequestTest do
   import Plug.Test
   import Plug.Conn, only: [put_req_header: 3, get_resp_header: 2]
   import GitServer.LocalGit
-  alias GitServer.{ObjectId, PackBuilder, PktLine, Repository, State}
+  alias GitServer.ObjectId
+  alias GitServer.PackBuilder
+  alias GitServer.PktLine
+  alias GitServer.Repository
+  alias GitServer.State
 
   @moduletag :tmp_dir
   @zero String.duplicate("0", 40)

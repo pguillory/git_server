@@ -14,28 +14,39 @@ defmodule GitServer.OutageStore do
   end
 
   @impl true
-  def get(config, key), do: call(config, :get, key, &GitServer.Store.get(&1, key))
+  def get(config, key) do
+    call(config, :get, key, &GitServer.Store.get(&1, key))
+  end
 
   @impl true
-  def get_file(config, key, path),
-    do: call(config, :get_file, key, &GitServer.Store.get_file(&1, key, path))
+  def get_file(config, key, path) do
+    call(config, :get_file, key, &GitServer.Store.get_file(&1, key, path))
+  end
 
   @impl true
-  def put(config, key, body, condition),
-    do: call(config, :put, key, &GitServer.Store.put(&1, key, body, condition))
+  def put(config, key, body, condition) do
+    call(config, :put, key, &GitServer.Store.put(&1, key, body, condition))
+  end
 
   @impl true
-  def put_file(config, key, path, condition),
-    do: call(config, :put_file, key, &GitServer.Store.put_file(&1, key, path, condition))
+  def put_file(config, key, path, condition) do
+    call(config, :put_file, key, &GitServer.Store.put_file(&1, key, path, condition))
+  end
 
   @impl true
-  def delete(config, key), do: call(config, :delete, key, &GitServer.Store.delete(&1, key))
+  def delete(config, key) do
+    call(config, :delete, key, &GitServer.Store.delete(&1, key))
+  end
 
   @impl true
-  def list(config, prefix), do: call(config, :list, prefix, &GitServer.Store.list(&1, prefix))
+  def list(config, prefix) do
+    call(config, :list, prefix, &GitServer.Store.list(&1, prefix))
+  end
 
   @impl true
-  def describe(config), do: "outage " <> GitServer.Store.describe(config.inner)
+  def describe(config) do
+    "outage " <> GitServer.Store.describe(config.inner)
+  end
 
   defp call(config, kind, key, fun) do
     if kind in config.calls and key =~ config.pattern,

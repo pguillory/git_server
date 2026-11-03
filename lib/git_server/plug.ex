@@ -49,7 +49,13 @@ defmodule GitServer.Plug do
 
   import Plug.Conn
   require Logger
-  alias GitServer.{Body, Config, HTTP, PktLine, RepoName, ReceivePack, UploadPack}
+  alias GitServer.Body
+  alias GitServer.Config
+  alias GitServer.HTTP
+  alias GitServer.PktLine
+  alias GitServer.RepoName
+  alias GitServer.ReceivePack
+  alias GitServer.UploadPack
 
   @impl true
   def init(opts) do

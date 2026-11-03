@@ -22,39 +22,54 @@ defmodule GitServer.Pack do
           {:base, GitServer.Object.type()} | {:ofs, non_neg_integer} | {:ref, ObjectId.t()}
 
   @doc "The size of the pack file header."
-  def header_size, do: @header_size
+  def header_size do
+    @header_size
+  end
 
   @doc "The size of the trailer checksum."
-  def trailer_size, do: ObjectId.size()
+  def trailer_size do
+    ObjectId.size()
+  end
 
   @doc "Encodes the pack file header."
-  def encode_header(count), do: <<"PACK", 2::32, count::32>>
+  def encode_header(count) do
+    <<"PACK", 2::32, count::32>>
+  end
 
   @doc "Parses the pack file header."
-  def parse_header(<<"PACK", version::32, count::32, _::binary>>) when version in [2, 3],
-    do: {:ok, count}
+  def parse_header(<<"PACK", version::32, count::32, _::binary>>) when version in [2, 3] do
+    {:ok, count}
+  end
 
-  def parse_header(_), do: {:error, "not a pack file"}
+  def parse_header(_) do
+    {:error, "not a pack file"}
+  end
 
   @doc "Encodes an object header for a whole object."
-  def encode_object_header(type, size), do: encode_size(type_code(type), size)
+  def encode_object_header(type, size) do
+    encode_size(type_code(type), size)
+  end
 
   @doc """
   Encodes the header of an OFS_DELTA entry: its delta's inflated `size`, and its
   base `distance` bytes before the entry's own offset.
   """
-  def encode_ofs_delta_header(size, distance) when distance > 0,
-    do: encode_size(6, size) <> encode_ofs_distance(distance)
+  def encode_ofs_delta_header(size, distance) when distance > 0 do
+    encode_size(6, size) <> encode_ofs_distance(distance)
+  end
 
   defp encode_size(code, size) do
     first = bor(code <<< 4, band(size, 0x0F))
     encode_size_rest(first, size >>> 4)
   end
 
-  defp encode_size_rest(byte, 0), do: <<byte>>
+  defp encode_size_rest(byte, 0) do
+    <<byte>>
+  end
 
-  defp encode_size_rest(byte, rest),
-    do: <<bor(byte, 0x80)>> <> encode_size_rest(band(rest, 0x7F), rest >>> 7)
+  defp encode_size_rest(byte, rest) do
+    <<bor(byte, 0x80)>> <> encode_size_rest(band(rest, 0x7F), rest >>> 7)
+  end
 
   @doc """
   Parses the object header at the start of `binary`, for an object at pack offset
@@ -73,22 +88,42 @@ defmodule GitServer.Pack do
     end
   end
 
-  def parse_object_header(<<>>, _offset), do: :more
+  def parse_object_header(<<>>, _offset) do
+    :more
+  end
 
   # A size never needs more than 64 bits; a longer varint is corrupt.
-  defp size_varint(byte, _rest, _size, shift, _used) when byte >= 0x80 and shift > 60,
-    do: {:error, "bad object header"}
+  defp size_varint(byte, _rest, _size, shift, _used) when byte >= 0x80 and shift > 60 do
+    {:error, "bad object header"}
+  end
 
-  defp size_varint(byte, <<next, rest::binary>>, size, shift, used) when byte >= 0x80,
-    do: size_varint(next, rest, bor(size, band(next, 0x7F) <<< shift), shift + 7, used + 1)
+  defp size_varint(byte, <<next, rest::binary>>, size, shift, used) when byte >= 0x80 do
+    size_varint(next, rest, bor(size, band(next, 0x7F) <<< shift), shift + 7, used + 1)
+  end
 
-  defp size_varint(byte, <<>>, _size, _shift, _used) when byte >= 0x80, do: :more
-  defp size_varint(_byte, rest, size, _shift, used), do: {:ok, size, rest, used}
+  defp size_varint(byte, <<>>, _size, _shift, _used) when byte >= 0x80 do
+    :more
+  end
 
-  defp kind(1, _rest, _offset, used), do: {:ok, {:base, :commit}, used}
-  defp kind(2, _rest, _offset, used), do: {:ok, {:base, :tree}, used}
-  defp kind(3, _rest, _offset, used), do: {:ok, {:base, :blob}, used}
-  defp kind(4, _rest, _offset, used), do: {:ok, {:base, :tag}, used}
+  defp size_varint(_byte, rest, size, _shift, used) do
+    {:ok, size, rest, used}
+  end
+
+  defp kind(1, _rest, _offset, used) do
+    {:ok, {:base, :commit}, used}
+  end
+
+  defp kind(2, _rest, _offset, used) do
+    {:ok, {:base, :tree}, used}
+  end
+
+  defp kind(3, _rest, _offset, used) do
+    {:ok, {:base, :blob}, used}
+  end
+
+  defp kind(4, _rest, _offset, used) do
+    {:ok, {:base, :tag}, used}
+  end
 
   defp kind(6, rest, offset, used) do
     with {:ok, distance, n} <- ofs_varint(rest, 0, 0) do
@@ -109,11 +144,18 @@ defmodule GitServer.Pack do
     end
   end
 
-  defp kind(_, _rest, _offset, _used), do: {:error, "bad object type"}
+  defp kind(_, _rest, _offset, _used) do
+    {:error, "bad object type"}
+  end
 
   # OFS_DELTA distance: big-endian 7-bit groups, adding 1 before each shift.
-  defp ofs_varint(_rest, _value, n) when n > 9, do: {:error, "bad delta base offset"}
-  defp ofs_varint(<<>>, _value, _n), do: :more
+  defp ofs_varint(_rest, _value, n) when n > 9 do
+    {:error, "bad delta base offset"}
+  end
+
+  defp ofs_varint(<<>>, _value, _n) do
+    :more
+  end
 
   defp ofs_varint(<<byte, rest::binary>>, value, n) do
     value = if n == 0, do: band(byte, 0x7F), else: bor((value + 1) <<< 7, band(byte, 0x7F))
@@ -126,11 +168,27 @@ defmodule GitServer.Pack do
     :erlang.list_to_binary(ofs_bytes(distance >>> 7, [band(distance, 0x7F)]))
   end
 
-  defp ofs_bytes(0, acc), do: acc
-  defp ofs_bytes(n, acc), do: ofs_bytes((n - 1) >>> 7, [bor(0x80, band(n - 1, 0x7F)) | acc])
+  defp ofs_bytes(0, acc) do
+    acc
+  end
 
-  defp type_code(:commit), do: 1
-  defp type_code(:tree), do: 2
-  defp type_code(:blob), do: 3
-  defp type_code(:tag), do: 4
+  defp ofs_bytes(n, acc) do
+    ofs_bytes((n - 1) >>> 7, [bor(0x80, band(n - 1, 0x7F)) | acc])
+  end
+
+  defp type_code(:commit) do
+    1
+  end
+
+  defp type_code(:tree) do
+    2
+  end
+
+  defp type_code(:blob) do
+    3
+  end
+
+  defp type_code(:tag) do
+    4
+  end
 end

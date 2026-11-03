@@ -28,8 +28,12 @@ defmodule GitServer.Pack.Indexer do
   the pack.
   """
 
-  alias GitServer.{Object, ObjectId, Pack}
-  alias GitServer.Pack.{Cache, Idx, Reader}
+  alias GitServer.Object
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.Pack.Cache
+  alias GitServer.Pack.Idx
+  alias GitServer.Pack.Reader
 
   @chunk 65_536
   @max_header 40
@@ -57,7 +61,9 @@ defmodule GitServer.Pack.Indexer do
         }
 
   @doc "The default limits."
-  def defaults, do: @defaults
+  def defaults do
+    @defaults
+  end
 
   @doc "Indexes the pack file at `path`."
   @spec index(Path.t(), keyword) :: {:ok, result} | {:error, String.t()}
@@ -130,7 +136,9 @@ defmodule GitServer.Pack.Indexer do
     }
   end
 
-  defp checksum(_fd, pos, stop, hash) when pos >= stop, do: ObjectId.hash_final(hash)
+  defp checksum(_fd, pos, stop, hash) when pos >= stop do
+    ObjectId.hash_final(hash)
+  end
 
   defp checksum(fd, pos, stop, hash) do
     len = min(1_048_576, stop - pos)
@@ -143,8 +151,9 @@ defmodule GitServer.Pack.Indexer do
     {entries, ids, left}
   end
 
-  defp pass1(_fd, pos, data_end, _count, _opts, _entries, _ids, _left) when pos >= data_end,
-    do: Reader.fail("truncated pack")
+  defp pass1(_fd, pos, data_end, _count, _opts, _entries, _ids, _left) when pos >= data_end do
+    Reader.fail("truncated pack")
+  end
 
   defp pass1(fd, offset, data_end, count, opts, entries, ids, left) do
     header = Reader.pread(fd, offset, min(@max_header, data_end - offset))
@@ -197,7 +206,9 @@ defmodule GitServer.Pack.Indexer do
   end
 
   # `left` is the links still allowed, or `:discard` to check links and keep none.
-  defp links_left(opts), do: if(opts[:links], do: opts[:max_links], else: :discard)
+  defp links_left(opts) do
+    if(opts[:links], do: opts[:max_links], else: :discard)
+  end
 
   defp links(type, content, id, :discard) do
     case Object.parse_links(type, content) do
@@ -343,10 +354,13 @@ defmodule GitServer.Pack.Indexer do
 
   # A false candidate is about a 1 in 65,536 chance per 64 KB, so a stream with many is
   # crafted to make each object cost many inflations, and is refused.
-  defp first_confirmed(_fd, _e, _candidates, _crc0, rejected) when rejected > @max_rejected,
-    do: Reader.fail("corrupt object")
+  defp first_confirmed(_fd, _e, _candidates, _crc0, rejected) when rejected > @max_rejected do
+    Reader.fail("corrupt object")
+  end
 
-  defp first_confirmed(_fd, _e, [], _crc0, rejected), do: {:rejected, rejected}
+  defp first_confirmed(_fd, _e, [], _crc0, rejected) do
+    {:rejected, rejected}
+  end
 
   defp first_confirmed(fd, e, [stop | rest], crc0, rejected) do
     Reader.charge(e.budget, max(e.size, stop - e.start))
@@ -379,7 +393,9 @@ defmodule GitServer.Pack.Indexer do
     end
   end
 
-  defp confirm_feed(_fd, _z, pos, stop, _size, n, crc) when pos >= stop, do: {n, crc}
+  defp confirm_feed(_fd, _z, pos, stop, _size, n, crc) when pos >= stop do
+    {n, crc}
+  end
 
   defp confirm_feed(fd, z, pos, stop, size, n, crc) do
     bytes = Reader.pread(fd, pos, min(@chunk, stop - pos))

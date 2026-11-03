@@ -6,7 +6,9 @@ defmodule GitServer.ShallowTest do
   use ExUnit.Case, async: true
   import GitServer.TestGit
   import Plug.Conn, only: [put_req_header: 3]
-  alias GitServer.{PktLine, Shallow, TestServer}
+  alias GitServer.PktLine
+  alias GitServer.Shallow
+  alias GitServer.TestServer
 
   @moduletag :tmp_dir
 

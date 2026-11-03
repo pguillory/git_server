@@ -86,7 +86,12 @@ defmodule GitServer.ReceivePack do
   `before_update`'s is.
   """
 
-  alias GitServer.{Body, Config, HTTP, PktLine, RefName, Repository}
+  alias GitServer.Body
+  alias GitServer.Config
+  alias GitServer.HTTP
+  alias GitServer.PktLine
+  alias GitServer.RefName
+  alias GitServer.Repository
   alias GitServer.ReceivePack.Update
 
   @service "git-receive-pack"
@@ -268,7 +273,9 @@ defmodule GitServer.ReceivePack do
     end
   end
 
-  defp hex_id?(text), do: text =~ ~r/\A[0-9a-f]{40}\z/
+  defp hex_id?(text) do
+    text =~ ~r/\A[0-9a-f]{40}\z/
+  end
 
   # Unknown capabilities are ignored, as git's receive-pack does, but the object
   # format must be ours.
@@ -394,12 +401,19 @@ defmodule GitServer.ReceivePack do
     reply(conn, options, Update.unpack_failed(commands, reason))
   end
 
-  defp read_error(:bad_gzip), do: "malformed gzip body"
-  defp read_error(_reason), do: "cannot read the pack"
+  defp read_error(:bad_gzip) do
+    "malformed gzip body"
+  end
+
+  defp read_error(_reason) do
+    "cannot read the pack"
+  end
 
   # Step 6: report-status, inner pkt-lines ending in a flush, after any message from
   # `before_update` on band 2, which git prints as `remote:` lines.
-  defp reply(conn, options, {unpack, commands}), do: reply(conn, options, {unpack, commands, nil})
+  defp reply(conn, options, {unpack, commands}) do
+    reply(conn, options, {unpack, commands, nil})
+  end
 
   defp reply(conn, options, {unpack, commands, message}) do
     unpack_line =
@@ -428,8 +442,13 @@ defmodule GitServer.ReceivePack do
 
   # Sent as given, split across as many packets as it takes, ending in a newline so
   # git prints its last line.
-  defp message(nil), do: []
-  defp message(""), do: []
+  defp message(nil) do
+    []
+  end
+
+  defp message("") do
+    []
+  end
 
   defp message(text) do
     if String.ends_with?(text, "\n"),

@@ -3,8 +3,15 @@ defmodule GitServer.ObjectDBTest do
 
   import GitServer.LocalGit
 
-  alias GitServer.{GitFixture, Object, ObjectDB, ObjectId, Pack, PackBuilder}
-  alias GitServer.Pack.{Files, Idx, Writer}
+  alias GitServer.GitFixture
+  alias GitServer.Object
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.PackBuilder
+  alias GitServer.Pack.Files
+  alias GitServer.Pack.Idx
+  alias GitServer.Pack.Writer
 
   setup_all do
     home = tmp_dir!("object_db")
@@ -181,7 +188,9 @@ defmodule GitServer.ObjectDBTest do
     end
   end
 
-  defp expected_links(_f, _hex, :blob, _content), do: []
+  defp expected_links(_f, _hex, :blob, _content) do
+    []
+  end
 
   defp expected_links(f, hex, :commit, _content) do
     [tree | parents] = String.split(git(f, ["log", "-1", "--format=%T %P", hex]))
@@ -280,7 +289,15 @@ defmodule GitServer.ObjectDBTest do
              Writer.write(db, [missing], [], fn piece, acc -> [acc | piece] end)
   end
 
-  defp rev_parse(f, rev), do: String.trim(git(f, ["rev-parse", rev]))
-  defp git(f, args), do: git!(f.home, f.repo, args)
-  defp id(hex), do: elem(ObjectId.from_hex(hex), 1)
+  defp rev_parse(f, rev) do
+    String.trim(git(f, ["rev-parse", rev]))
+  end
+
+  defp git(f, args) do
+    git!(f.home, f.repo, args)
+  end
+
+  defp id(hex) do
+    elem(ObjectId.from_hex(hex), 1)
+  end
 end

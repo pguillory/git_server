@@ -7,7 +7,9 @@ defmodule GitServer.Pack.Writer do
   trailer checksum. A pack without deltas is valid and every git client accepts it.
   """
 
-  alias GitServer.{ObjectDB, ObjectId, Pack}
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Pack
 
   @doc """
   Writes the objects `ids`, read from `db`, in order. Returns `{:ok, checksum, acc}`,

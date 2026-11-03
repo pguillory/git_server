@@ -17,7 +17,9 @@ defmodule GitServer.Push do
   the call, and only in the process the function was called in.
   """
 
-  alias GitServer.{Object, ObjectDB, ObjectId}
+  alias GitServer.Object
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
 
   @enforce_keys [:repo, :conn, :refs, :updates, :db]
   defstruct @enforce_keys
@@ -86,11 +88,19 @@ defmodule GitServer.Push do
     end
   end
 
-  defp charge({entries, _bytes}, _size) when entries < 1, do: {:error, "too many files"}
-  defp charge({_entries, bytes}, size) when size + 1 > bytes, do: {:error, "paths too long"}
+  defp charge({entries, _bytes}, _size) when entries < 1 do
+    {:error, "too many files"}
+  end
+
+  defp charge({_entries, bytes}, size) when size + 1 > bytes do
+    {:error, "paths too long"}
+  end
+
   # The extra byte is the path's `/` or its entry's own overhead, so even empty names
   # use up the budget.
-  defp charge({entries, bytes}, size), do: {:ok, {entries - 1, bytes - size - 1}}
+  defp charge({entries, bytes}, size) do
+    {:ok, {entries - 1, bytes - size - 1}}
+  end
 
   @doc """
   The content of the file at `path` (`/`-separated, no leading slash) in the tree at
@@ -181,7 +191,9 @@ defmodule GitServer.Push do
     end
   end
 
-  defp peel(_db, _id, 0), do: {:error, "tag chain too long"}
+  defp peel(_db, _id, 0) do
+    {:error, "tag chain too long"}
+  end
 
   defp peel(db, id, n) do
     case ObjectDB.lookup(db, id) do
@@ -208,5 +220,7 @@ defmodule GitServer.Push do
     end
   end
 
-  defp hex(id), do: ObjectId.to_hex(id)
+  defp hex(id) do
+    ObjectId.to_hex(id)
+  end
 end

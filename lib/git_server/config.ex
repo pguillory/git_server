@@ -81,15 +81,21 @@ defmodule GitServer.Config do
     end
   end
 
-  defp call(:error, opts), do: {:ok, opts}
+  defp call(:error, opts) do
+    {:ok, opts}
+  end
 
-  defp call({:ok, {module, function, args}}, _opts) when is_atom(module) and is_list(args),
-    do: call_config(fn -> apply(module, function, args) end)
+  defp call({:ok, {module, function, args}}, _opts) when is_atom(module) and is_list(args) do
+    call_config(fn -> apply(module, function, args) end)
+  end
 
-  defp call({:ok, fun}, _opts) when is_function(fun, 0), do: call_config(fun)
+  defp call({:ok, fun}, _opts) when is_function(fun, 0) do
+    call_config(fun)
+  end
 
-  defp call({:ok, _config}, _opts),
-    do: {:error, "the :config option must be {module, function, args} or a function of none"}
+  defp call({:ok, _config}, _opts) do
+    {:error, "the :config option must be {module, function, args} or a function of none"}
+  end
 
   defp call_config(fun) do
     result = fun.()
@@ -165,14 +171,24 @@ defmodule GitServer.Config do
     end
   end
 
-  defp names(keys), do: Enum.map_join(keys, ", ", &inspect/1)
+  defp names(keys) do
+    Enum.map_join(keys, ", ", &inspect/1)
+  end
 
   @doc """
   A byte count for a message naming a limit: `"100 MB"`, `"2 KB"`, or `"1500 bytes"`.
   """
-  def format_bytes(n) when rem(n, 1_000_000) == 0 and n > 0, do: "#{div(n, 1_000_000)} MB"
-  def format_bytes(n) when rem(n, 1000) == 0 and n > 0, do: "#{div(n, 1000)} KB"
-  def format_bytes(n), do: "#{n} bytes"
+  def format_bytes(n) when rem(n, 1_000_000) == 0 and n > 0 do
+    "#{div(n, 1_000_000)} MB"
+  end
+
+  def format_bytes(n) when rem(n, 1000) == 0 and n > 0 do
+    "#{div(n, 1000)} KB"
+  end
+
+  def format_bytes(n) do
+    "#{n} bytes"
+  end
 
   @doc """
   The limits for indexing a pushed pack (`GitServer.Pack.Indexer`). The pack size and

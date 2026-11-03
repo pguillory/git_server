@@ -49,7 +49,9 @@ defmodule GitServer.Pack.Files do
   end
 
   @doc "The number of files open now."
-  def open_count(%__MODULE__{order: order}), do: :ets.info(order, :size)
+  def open_count(%__MODULE__{order: order}) do
+    :ets.info(order, :size)
+  end
 
   defp close_oldest(%__MODULE__{table: table, order: order}) do
     seq = :ets.first(order)

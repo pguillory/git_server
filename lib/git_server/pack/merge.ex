@@ -23,8 +23,11 @@ defmodule GitServer.Pack.Merge do
   with the inputs' (see `GitServer.Compaction`).
   """
 
-  alias GitServer.{ObjectDB, ObjectId, Pack}
-  alias GitServer.Pack.{Idx, Reader}
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.Pack.Idx
+  alias GitServer.Pack.Reader
 
   @chunk 65_536
   @max_header 40
@@ -180,7 +183,9 @@ defmodule GitServer.Pack.Merge do
     end
   end
 
-  defp copy(w, _fd, pos, stop) when pos >= stop, do: w
+  defp copy(w, _fd, pos, stop) when pos >= stop do
+    w
+  end
 
   defp copy(w, fd, pos, stop) do
     bytes = Reader.pread(fd, pos, min(@chunk, stop - pos))

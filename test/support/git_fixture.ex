@@ -75,7 +75,9 @@ defmodule GitServer.GitFixture do
     git!(home, repo, ["cat-file", "--batch-all-objects", "--batch"]) |> parse_batch([])
   end
 
-  defp parse_batch("", acc), do: Enum.reverse(acc)
+  defp parse_batch("", acc) do
+    Enum.reverse(acc)
+  end
 
   defp parse_batch(out, acc) do
     [header, rest] = :binary.split(out, "\n")

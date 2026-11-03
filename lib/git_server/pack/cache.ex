@@ -38,7 +38,9 @@ defmodule GitServer.Pack.Cache do
   @overhead 128
 
   @doc "Stores `value`, whose content is `size` bytes, under `key`."
-  def put(%__MODULE__{max_bytes: max}, _key, _value, size) when size + @overhead > max, do: :ok
+  def put(%__MODULE__{max_bytes: max}, _key, _value, size) when size + @overhead > max do
+    :ok
+  end
 
   def put(%__MODULE__{table: table, order: order} = cache, key, value, size) do
     size = size + @overhead
@@ -53,7 +55,9 @@ defmodule GitServer.Pack.Cache do
     :ok
   end
 
-  defp evict(%__MODULE__{max_bytes: max}, bytes) when bytes <= max, do: :ok
+  defp evict(%__MODULE__{max_bytes: max}, bytes) when bytes <= max do
+    :ok
+  end
 
   defp evict(%__MODULE__{table: table, order: order} = cache, _bytes) do
     seq = :ets.first(order)

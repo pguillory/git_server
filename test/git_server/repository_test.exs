@@ -1,7 +1,9 @@
 defmodule GitServer.RepositoryTest do
   use ExUnit.Case, async: true
   import Bitwise
-  alias GitServer.{Repository, State, Store}
+  alias GitServer.Repository
+  alias GitServer.State
+  alias GitServer.Store
 
   @a String.duplicate("a", 40)
   @b String.duplicate("b", 40)
@@ -15,7 +17,9 @@ defmodule GitServer.RepositoryTest do
     @behaviour GitServer.Store
     alias GitServer.Store
 
-    def wrap(store, owner), do: {__MODULE__, %{inner: store, owner: owner}}
+    def wrap(store, owner) do
+      {__MODULE__, %{inner: store, owner: owner}}
+    end
 
     @impl true
     def get_file(config, key, path) do
@@ -33,19 +37,34 @@ defmodule GitServer.RepositoryTest do
     end
 
     @impl true
-    def get(config, key), do: Store.get(config.inner, key)
-    @impl true
-    def put(config, key, body, condition), do: Store.put(config.inner, key, body, condition)
-    @impl true
-    def put_file(config, key, path, condition),
-      do: Store.put_file(config.inner, key, path, condition)
+    def get(config, key) do
+      Store.get(config.inner, key)
+    end
 
     @impl true
-    def delete(config, key), do: Store.delete(config.inner, key)
+    def put(config, key, body, condition) do
+      Store.put(config.inner, key, body, condition)
+    end
+
     @impl true
-    def list(config, prefix), do: Store.list(config.inner, prefix)
+    def put_file(config, key, path, condition) do
+      Store.put_file(config.inner, key, path, condition)
+    end
+
     @impl true
-    def describe(config), do: "gate " <> Store.describe(config.inner)
+    def delete(config, key) do
+      Store.delete(config.inner, key)
+    end
+
+    @impl true
+    def list(config, prefix) do
+      Store.list(config.inner, prefix)
+    end
+
+    @impl true
+    def describe(config) do
+      "gate " <> Store.describe(config.inner)
+    end
   end
 
   defmodule RaisingStore do
@@ -53,22 +72,44 @@ defmodule GitServer.RepositoryTest do
     @behaviour GitServer.Store
     alias GitServer.Store
 
-    def wrap(store), do: {__MODULE__, store}
+    def wrap(store) do
+      {__MODULE__, store}
+    end
 
     @impl true
-    def get_file(_inner, _key, _path), do: raise("boom")
+    def get_file(_inner, _key, _path) do
+      raise("boom")
+    end
+
     @impl true
-    def get(inner, key), do: Store.get(inner, key)
+    def get(inner, key) do
+      Store.get(inner, key)
+    end
+
     @impl true
-    def put(inner, key, body, condition), do: Store.put(inner, key, body, condition)
+    def put(inner, key, body, condition) do
+      Store.put(inner, key, body, condition)
+    end
+
     @impl true
-    def put_file(inner, key, path, condition), do: Store.put_file(inner, key, path, condition)
+    def put_file(inner, key, path, condition) do
+      Store.put_file(inner, key, path, condition)
+    end
+
     @impl true
-    def delete(inner, key), do: Store.delete(inner, key)
+    def delete(inner, key) do
+      Store.delete(inner, key)
+    end
+
     @impl true
-    def list(inner, prefix), do: Store.list(inner, prefix)
+    def list(inner, prefix) do
+      Store.list(inner, prefix)
+    end
+
     @impl true
-    def describe(inner), do: "raising " <> Store.describe(inner)
+    def describe(inner) do
+      "raising " <> Store.describe(inner)
+    end
   end
 
   test "state reads and conditional writes" do
@@ -130,12 +171,17 @@ defmodule GitServer.RepositoryTest do
     end
   end
 
-  defp names(n), do: for(i <- 1..n, do: Base.encode16(<<i::160>>, case: :lower))
+  defp names(n) do
+    for(i <- 1..n, do: Base.encode16(<<i::160>>, case: :lower))
+  end
 
-  defp read_packs(snapshot),
-    do: for({pack, idx} <- snapshot.packs, do: {File.read!(pack), File.read!(idx)})
+  defp read_packs(snapshot) do
+    for({pack, idx} <- snapshot.packs, do: {File.read!(pack), File.read!(idx)})
+  end
 
-  defp contents(names), do: for(name <- names, do: {"pack #{name}", "idx #{name}"})
+  defp contents(names) do
+    for(name <- names, do: {"pack #{name}", "idx #{name}"})
+  end
 
   @tag :tmp_dir
   test "downloads a few files at a time, keeping the state's order", %{tmp_dir: tmp_dir} do

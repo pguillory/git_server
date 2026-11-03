@@ -11,7 +11,11 @@ defmodule GitServer.ReceivePack.Update do
   # from `before_update`.
 
   require Logger
-  alias GitServer.{Config, ObjectDB, ObjectId, Repository, State}
+  alias GitServer.Config
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Repository
+  alias GitServer.State
   alias GitServer.Pack.Indexer
 
   @zero_id String.duplicate("0", 40)
@@ -32,19 +36,25 @@ defmodule GitServer.ReceivePack.Update do
   end
 
   # The indexer's reasons for a push over a limit, with the limit.
-  defp name_limit("pack too large", config),
-    do: "pack too large (limit #{Config.format_bytes(config.max_pack_bytes)})"
+  defp name_limit("pack too large", config) do
+    "pack too large (limit #{Config.format_bytes(config.max_pack_bytes)})"
+  end
 
-  defp name_limit("object too large", config),
-    do: "object too large (limit #{Config.format_bytes(config.max_object_bytes)})"
+  defp name_limit("object too large", config) do
+    "object too large (limit #{Config.format_bytes(config.max_object_bytes)})"
+  end
 
-  defp name_limit("too many objects", config),
-    do: "too many objects in pack (limit #{config.max_objects})"
+  defp name_limit("too many objects", config) do
+    "too many objects in pack (limit #{config.max_objects})"
+  end
 
-  defp name_limit("delta chain too deep", config),
-    do: "delta chain too deep (limit #{config.max_delta_depth})"
+  defp name_limit("delta chain too deep", config) do
+    "delta chain too deep (limit #{config.max_delta_depth})"
+  end
 
-  defp name_limit(reason, _config), do: reason
+  defp name_limit(reason, _config) do
+    reason
+  end
 
   @doc """
   Calls the host's `after_update` function, if any, with the updates a push's result
@@ -52,10 +62,13 @@ defmodule GitServer.ReceivePack.Update do
   runs in a process of its own, its result is ignored, and a failure or timeout is
   logged without the failure's message or values, as for `before_update`.
   """
-  def after_update(%{after_update: nil}, _repo, _conn, _result), do: :ok
+  def after_update(%{after_update: nil}, _repo, _conn, _result) do
+    :ok
+  end
 
-  def after_update(config, repo, conn, {unpack, commands}),
-    do: after_update(config, repo, conn, {unpack, commands, nil})
+  def after_update(config, repo, conn, {unpack, commands}) do
+    after_update(config, repo, conn, {unpack, commands, nil})
+  end
 
   def after_update(config, repo, conn, {unpack, commands, _message}) do
     landed = Enum.filter(commands, &(&1.error == nil))
@@ -92,11 +105,18 @@ defmodule GitServer.ReceivePack.Update do
   end
 
   @doc "Sets a command's error, unless it already has one."
-  def reject(%{error: nil} = command, reason), do: %{command | error: reason}
-  def reject(command, _reason), do: command
+  def reject(%{error: nil} = command, reason) do
+    %{command | error: reason}
+  end
+
+  def reject(command, _reason) do
+    command
+  end
 
   @doc "Whether a command deletes its ref."
-  def delete?(command), do: command.new == @zero_id
+  def delete?(command) do
+    command.new == @zero_id
+  end
 
   @doc "Every command rejected for an unpack failure."
   def unpack_failed(commands, reason) do
@@ -194,7 +214,9 @@ defmodule GitServer.ReceivePack.Update do
   # The host's `before_update` function, on the updates that passed. It runs in its
   # own process, with its own object database, so a timeout can kill it. Returns :ok,
   # {:declined, reason, message}, or {:error, :storage, reason}.
-  defp before_update(%{before_update: nil}, _snapshot, _pack, _conn, _passing), do: :ok
+  defp before_update(%{before_update: nil}, _snapshot, _pack, _conn, _passing) do
+    :ok
+  end
 
   defp before_update(config, snapshot, pack, conn, passing) do
     with {:ok, pushed} <- pushed_pack(pack) do
@@ -221,12 +243,22 @@ defmodule GitServer.ReceivePack.Update do
     end
   end
 
-  defp present(@zero_id), do: nil
-  defp present(id), do: id
+  defp present(@zero_id) do
+    nil
+  end
+
+  defp present(id) do
+    id
+  end
 
   # The pushed pack, with its idx beside it, for an object database.
-  defp pushed_pack(nil), do: {:ok, []}
-  defp pushed_pack({_path, %{objects: objects}}) when objects == %{}, do: {:ok, []}
+  defp pushed_pack(nil) do
+    {:ok, []}
+  end
+
+  defp pushed_pack({_path, %{objects: objects}}) when objects == %{} do
+    {:ok, []}
+  end
 
   defp pushed_pack({path, pack}) do
     idx_path = Path.rootname(path) <> ".idx"
@@ -285,7 +317,9 @@ defmodule GitServer.ReceivePack.Update do
 
   # Invariant: every object in a listed pack has its referents in the listed packs.
   # Packs are only ever added, so this holds for any later state too.
-  defp check_links(nil, _db), do: :ok
+  defp check_links(nil, _db) do
+    :ok
+  end
 
   # Each id outside the pack is looked up once, however many objects point to it.
   defp check_links({_path, pack}, db) do
@@ -302,7 +336,9 @@ defmodule GitServer.ReceivePack.Update do
     end
   end
 
-  defp link_errors([], _objects, _db, seen), do: {:ok, seen}
+  defp link_errors([], _objects, _db, seen) do
+    {:ok, seen}
+  end
 
   defp link_errors([{type, id} | links], objects, db, seen) do
     {found, seen} =
@@ -386,7 +422,9 @@ defmodule GitServer.ReceivePack.Update do
     parent? or Enum.any?(names, &String.starts_with?(&1, ref <> "/"))
   end
 
-  defp command_error(%{error: error}, _state, _objects, _db) when error != nil, do: nil
+  defp command_error(%{error: error}, _state, _objects, _db) when error != nil do
+    nil
+  end
 
   defp command_error(command, state, objects, db) do
     current = Map.get(state.refs, command.ref, @zero_id)
@@ -410,17 +448,25 @@ defmodule GitServer.ReceivePack.Update do
     end
   end
 
-  defp branch?(ref), do: String.starts_with?(ref, "refs/heads/")
+  defp branch?(ref) do
+    String.starts_with?(ref, "refs/heads/")
+  end
 
   # Step 5a: the pack and idx, before the first state write. A pack with no objects
   # is neither stored nor listed, and one the state already lists (a client retrying)
   # isn't stored again.
-  defp store_pack(_config, _snapshot, _pack, {:stored, name}), do: {:ok, name}
-  defp store_pack(_config, _snapshot, nil, :unstored), do: {:ok, nil}
+  defp store_pack(_config, _snapshot, _pack, {:stored, name}) do
+    {:ok, name}
+  end
+
+  defp store_pack(_config, _snapshot, nil, :unstored) do
+    {:ok, nil}
+  end
 
   defp store_pack(_config, _snapshot, {_path, %{objects: objects}}, :unstored)
-       when objects == %{},
-       do: {:ok, nil}
+       when objects == %{} do
+    {:ok, nil}
+  end
 
   defp store_pack(config, snapshot, {path, pack}, :unstored) do
     name = ObjectId.to_hex(pack.checksum)

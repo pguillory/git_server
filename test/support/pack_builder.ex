@@ -10,7 +10,8 @@ defmodule GitServer.PackBuilder do
 
   import Bitwise
 
-  alias GitServer.{Object, ObjectId}
+  alias GitServer.Object
+  alias GitServer.ObjectId
 
   @type_codes %{commit: 1, tree: 2, blob: 3, tag: 4}
 
@@ -27,23 +28,36 @@ defmodule GitServer.PackBuilder do
   end
 
   @doc "A REF_DELTA entry, listed in an idx as `id`."
-  def ref_delta(id, base_id, delta),
-    do: %{type: 7, size: byte_size(delta), data: :zlib.compress(delta), id: id, base: base_id}
+  def ref_delta(id, base_id, delta) do
+    %{type: 7, size: byte_size(delta), data: :zlib.compress(delta), id: id, base: base_id}
+  end
 
   @doc "An OFS_DELTA entry against the entry at index `base`."
-  def ofs_delta(id, base, delta),
-    do: %{type: 6, size: byte_size(delta), data: :zlib.compress(delta), id: id, base: base}
+  def ofs_delta(id, base, delta) do
+    %{type: 6, size: byte_size(delta), data: :zlib.compress(delta), id: id, base: base}
+  end
 
   @doc "A delta that inserts `content` whole, against a base of `base_size` bytes."
-  def insert_delta(base_size, content),
-    do: varint(base_size) <> varint(byte_size(content)) <> inserts(content)
+  def insert_delta(base_size, content) do
+    varint(base_size) <> varint(byte_size(content)) <> inserts(content)
+  end
 
-  defp inserts(<<chunk::binary-size(127), rest::binary>>), do: <<127>> <> chunk <> inserts(rest)
-  defp inserts(<<>>), do: <<>>
-  defp inserts(rest), do: <<byte_size(rest)>> <> rest
+  defp inserts(<<chunk::binary-size(127), rest::binary>>) do
+    <<127>> <> chunk <> inserts(rest)
+  end
+
+  defp inserts(<<>>) do
+    <<>>
+  end
+
+  defp inserts(rest) do
+    <<byte_size(rest)>> <> rest
+  end
 
   @doc "Compresses with zlib at a level (0 stores the bytes uncompressed)."
-  def compress(content, :default), do: :zlib.compress(content)
+  def compress(content, :default) do
+    :zlib.compress(content)
+  end
 
   def compress(content, level) do
     z = :zlib.open()
@@ -84,8 +98,13 @@ defmodule GitServer.PackBuilder do
     end
   end
 
-  defp size_rest(byte, 0), do: <<byte>>
-  defp size_rest(byte, rest), do: <<bor(byte, 0x80)>> <> size_rest(band(rest, 0x7F), rest >>> 7)
+  defp size_rest(byte, 0) do
+    <<byte>>
+  end
+
+  defp size_rest(byte, rest) do
+    <<bor(byte, 0x80)>> <> size_rest(band(rest, 0x7F), rest >>> 7)
+  end
 
   # The OFS_DELTA distance encoding, the inverse of the decoder's "add 1 then shift".
   def ofs(distance) do
@@ -93,9 +112,19 @@ defmodule GitServer.PackBuilder do
     :erlang.list_to_binary(bytes)
   end
 
-  defp ofs_bytes(0, acc), do: acc
-  defp ofs_bytes(n, acc), do: ofs_bytes((n - 1) >>> 7, [bor(0x80, band(n - 1, 0x7F)) | acc])
+  defp ofs_bytes(0, acc) do
+    acc
+  end
 
-  def varint(n) when n < 0x80, do: <<n>>
-  def varint(n), do: <<bor(0x80, band(n, 0x7F))>> <> varint(n >>> 7)
+  defp ofs_bytes(n, acc) do
+    ofs_bytes((n - 1) >>> 7, [bor(0x80, band(n - 1, 0x7F)) | acc])
+  end
+
+  def varint(n) when n < 0x80 do
+    <<n>>
+  end
+
+  def varint(n) do
+    <<bor(0x80, band(n, 0x7F))>> <> varint(n >>> 7)
+  end
 end

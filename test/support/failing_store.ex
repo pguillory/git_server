@@ -14,10 +14,14 @@ defmodule GitServer.FailingStore do
   end
 
   @impl true
-  def get(config, key), do: GitServer.Store.get(config.inner, key)
+  def get(config, key) do
+    GitServer.Store.get(config.inner, key)
+  end
 
   @impl true
-  def get_file(config, key, path), do: GitServer.Store.get_file(config.inner, key, path)
+  def get_file(config, key, path) do
+    GitServer.Store.get_file(config.inner, key, path)
+  end
 
   @impl true
   def put(config, key, body, condition) do
@@ -32,13 +36,19 @@ defmodule GitServer.FailingStore do
   end
 
   @impl true
-  def delete(config, key), do: GitServer.Store.delete(config.inner, key)
+  def delete(config, key) do
+    GitServer.Store.delete(config.inner, key)
+  end
 
   @impl true
-  def list(config, prefix), do: GitServer.Store.list(config.inner, prefix)
+  def list(config, prefix) do
+    GitServer.Store.list(config.inner, prefix)
+  end
 
   @impl true
-  def describe(config), do: "failing " <> GitServer.Store.describe(config.inner)
+  def describe(config) do
+    "failing " <> GitServer.Store.describe(config.inner)
+  end
 
   defp maybe_fail(config, key) do
     if String.ends_with?(key, config.suffix) and :atomics.sub_get(config.counter, 1, 1) >= 0,

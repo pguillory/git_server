@@ -36,9 +36,12 @@ defmodule GitServer do
   other compactions, on any number of servers. Nothing calls it automatically: call
   it on a schedule, or after pushes from `:after_update`.
   """
-  def compact(opts, repo, compact_opts \\ []),
-    do: GitServer.Compaction.run(opts, repo, compact_opts)
+  def compact(opts, repo, compact_opts \\ []) do
+    GitServer.Compaction.run(opts, repo, compact_opts)
+  end
 
   @doc "The library version, as sent in the `agent` capability."
-  def version, do: @version
+  def version do
+    @version
+  end
 end

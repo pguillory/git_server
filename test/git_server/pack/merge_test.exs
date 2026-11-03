@@ -7,8 +7,13 @@ defmodule GitServer.Pack.MergeTest do
   import GitServer.LocalGit
   import GitServer.PackBuilder
 
-  alias GitServer.{GitFixture, Object, ObjectId, Pack}
-  alias GitServer.Pack.{Idx, Indexer, Merge}
+  alias GitServer.GitFixture
+  alias GitServer.Object
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.Pack.Idx
+  alias GitServer.Pack.Indexer
+  alias GitServer.Pack.Merge
 
   setup_all do
     home = tmp_dir!("merge")
@@ -50,8 +55,13 @@ defmodule GitServer.Pack.MergeTest do
       <<byte_size(tail)>> <> tail
   end
 
-  defp blob(content), do: object(:blob, content)
-  defp id(content), do: Object.id(:blob, content)
+  defp blob(content) do
+    object(:blob, content)
+  end
+
+  defp id(content) do
+    Object.id(:blob, content)
+  end
 
   test "merges git's packs into one holding each object once, as git indexes it",
        %{fixture: f} do

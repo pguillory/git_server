@@ -30,10 +30,14 @@ defmodule GitServer.RacingStore do
     result
   end
 
-  def get(config, key), do: GitServer.Store.get(config.inner, key)
+  def get(config, key) do
+    GitServer.Store.get(config.inner, key)
+  end
 
   @impl true
-  def get_file(config, key, path), do: GitServer.Store.get_file(config.inner, key, path)
+  def get_file(config, key, path) do
+    GitServer.Store.get_file(config.inner, key, path)
+  end
 
   @impl true
   def put(config, key, body, condition) do
@@ -45,15 +49,22 @@ defmodule GitServer.RacingStore do
   end
 
   @impl true
-  def put_file(config, key, path, condition),
-    do: GitServer.Store.put_file(config.inner, key, path, condition)
+  def put_file(config, key, path, condition) do
+    GitServer.Store.put_file(config.inner, key, path, condition)
+  end
 
   @impl true
-  def delete(config, key), do: GitServer.Store.delete(config.inner, key)
+  def delete(config, key) do
+    GitServer.Store.delete(config.inner, key)
+  end
 
   @impl true
-  def list(config, prefix), do: GitServer.Store.list(config.inner, prefix)
+  def list(config, prefix) do
+    GitServer.Store.list(config.inner, prefix)
+  end
 
   @impl true
-  def describe(config), do: "racing " <> GitServer.Store.describe(config.inner)
+  def describe(config) do
+    "racing " <> GitServer.Store.describe(config.inner)
+  end
 end

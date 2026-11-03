@@ -8,22 +8,20 @@ defmodule GitServer.CompactionTest do
   import ExUnit.CaptureLog
   import GitServer.TestGit
 
-  alias GitServer.{
-    Compaction,
-    CountingStore,
-    FailingStore,
-    Invariant,
-    Object,
-    ObjectId,
-    OutageStore,
-    PackBuilder,
-    RacingStore,
-    Repository,
-    Seed,
-    State,
-    Store,
-    TestServer
-  }
+  alias GitServer.Compaction
+  alias GitServer.CountingStore
+  alias GitServer.FailingStore
+  alias GitServer.Invariant
+  alias GitServer.Object
+  alias GitServer.ObjectId
+  alias GitServer.OutageStore
+  alias GitServer.PackBuilder
+  alias GitServer.RacingStore
+  alias GitServer.Repository
+  alias GitServer.Seed
+  alias GitServer.State
+  alias GitServer.Store
+  alias GitServer.TestServer
 
   alias GitServer.Pack.Idx
 
@@ -148,7 +146,9 @@ defmodule GitServer.CompactionTest do
   end
 
   describe "choosing packs" do
-    defp sizes(list), do: Enum.with_index(list, fn bytes, i -> {"p#{i}", bytes, 1} end)
+    defp sizes(list) do
+      Enum.with_index(list, fn bytes, i -> {"p#{i}", bytes, 1} end)
+    end
 
     test "nothing at or under max_packs, and never a single pack" do
       assert Compaction.choose(sizes([1, 1, 1]), max_packs: 3) == []
@@ -176,7 +176,9 @@ defmodule GitServer.CompactionTest do
   end
 
   describe "the state change" do
-    defp state_with(packs), do: %State{packs: packs, refs: %{"refs/heads/main" => "x"}}
+    defp state_with(packs) do
+      %State{packs: packs, refs: %{"refs/heads/main" => "x"}}
+    end
 
     test "replaces the inputs at the first one's place and keeps refs and head" do
       state = state_with(~w(a b c d))

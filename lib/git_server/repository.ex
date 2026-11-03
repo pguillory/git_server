@@ -17,7 +17,11 @@ defmodule GitServer.Repository do
 
   require Logger
 
-  alias GitServer.{Failure, PackCache, RepoName, State, Store}
+  alias GitServer.Failure
+  alias GitServer.PackCache
+  alias GitServer.RepoName
+  alias GitServer.State
+  alias GitServer.Store
 
   defmodule Snapshot do
     @moduledoc """
@@ -32,13 +36,19 @@ defmodule GitServer.Repository do
   end
 
   @doc "The store key of a repository's state."
-  def state_key(repo), do: RepoName.key_prefix(repo) <> "state"
+  def state_key(repo) do
+    RepoName.key_prefix(repo) <> "state"
+  end
 
   @doc "The store key of a pack, by its checksum in hex."
-  def pack_key(repo, name), do: RepoName.key_prefix(repo) <> "packs/#{name}.pack"
+  def pack_key(repo, name) do
+    RepoName.key_prefix(repo) <> "packs/#{name}.pack"
+  end
 
   @doc "The store key of a pack's idx, by the pack's checksum in hex."
-  def idx_key(repo, name), do: RepoName.key_prefix(repo) <> "packs/#{name}.idx"
+  def idx_key(repo, name) do
+    RepoName.key_prefix(repo) <> "packs/#{name}.idx"
+  end
 
   @doc """
   Reads a repository's state: `{:ok, state, etag}`, or `{:ok, State.new(), :absent}`
@@ -138,7 +148,9 @@ defmodule GitServer.Repository do
   end
 
   # A cache that can't be used doesn't fail the request, which goes on without it.
-  defp open_cache(nil, _store), do: {:ok, nil}
+  defp open_cache(nil, _store) do
+    {:ok, nil}
+  end
 
   defp open_cache({dir, max_bytes}, store) do
     case PackCache.open(dir, max_bytes, store) do
@@ -178,7 +190,9 @@ defmodule GitServer.Repository do
   `:deadline` when a race was lost at or past the deadline, or the store's reason
   when a write or refresh failed.
   """
-  def update(%Snapshot{} = snapshot, deadline, fun), do: update(snapshot, deadline, fun, nil, 0)
+  def update(%Snapshot{} = snapshot, deadline, fun) do
+    update(snapshot, deadline, fun, nil, 0)
+  end
 
   defp update(snapshot, deadline, fun, last, n) do
     case fun.(snapshot, last) do
@@ -287,8 +301,13 @@ defmodule GitServer.Repository do
 
   # A pack that fails the cache's checks is a storage error, and its files go, so a
   # later refresh doesn't take them as present.
-  defp cache_downloads(%Snapshot{cache: nil}, _names, _paths), do: :ok
-  defp cache_downloads(_snapshot, [], _paths), do: :ok
+  defp cache_downloads(%Snapshot{cache: nil}, _names, _paths) do
+    :ok
+  end
+
+  defp cache_downloads(_snapshot, [], _paths) do
+    :ok
+  end
 
   defp cache_downloads(snapshot, names, paths) do
     result =
@@ -311,8 +330,9 @@ defmodule GitServer.Repository do
     result
   end
 
-  defp pack_paths(snapshot, name),
-    do: {Path.join(snapshot.dir, "#{name}.pack"), Path.join(snapshot.dir, "#{name}.idx")}
+  defp pack_paths(snapshot, name) do
+    {Path.join(snapshot.dir, "#{name}.pack"), Path.join(snapshot.dir, "#{name}.idx")}
+  end
 
   # Downloaded under a temporary name and renamed into place whole.
   defp fetch_file(store, repo, {name, key, path}) do

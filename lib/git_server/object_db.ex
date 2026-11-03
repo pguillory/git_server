@@ -31,8 +31,13 @@ defmodule GitServer.ObjectDB do
 
   require Logger
 
-  alias GitServer.{Object, ObjectId, Pack}
-  alias GitServer.Pack.{Cache, Files, Idx, Reader}
+  alias GitServer.Object
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.Pack.Cache
+  alias GitServer.Pack.Files
+  alias GitServer.Pack.Idx
+  alias GitServer.Pack.Reader
 
   defstruct [:packs, :cache, :files, :names, :log_label, :logged]
 
@@ -48,7 +53,9 @@ defmodule GitServer.ObjectDB do
   ]
 
   @doc "The default limits."
-  def defaults, do: @defaults
+  def defaults do
+    @defaults
+  end
 
   @doc """
   Opens `packs`, a list of `{pack_path, idx_path}`. Each idx is read whole and checked,
@@ -209,8 +216,9 @@ defmodule GitServer.ObjectDB do
   end
 
   @doc "Whether any pack holds `id`."
-  def member?(%__MODULE__{packs: packs}, id),
-    do: Enum.any?(packs, fn {idx, _} -> Idx.member?(idx, id) end)
+  def member?(%__MODULE__{packs: packs}, id) do
+    Enum.any?(packs, fn {idx, _} -> Idx.member?(idx, id) end)
+  end
 
   @doc "See `GitServer.Object.parse_links/2`."
   defdelegate parse_links(type, content), to: Object
@@ -242,7 +250,9 @@ defmodule GitServer.ObjectDB do
   end
 
   # The reason is one of this module's own messages, which never quote content.
-  defp log(nil, _pack_path, _reason), do: :ok
+  defp log(nil, _pack_path, _reason) do
+    :ok
+  end
 
   defp log(label, pack_path, reason) do
     Logger.error("git_server: #{label}: pack #{Path.basename(pack_path)}: #{reason}")

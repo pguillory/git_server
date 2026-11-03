@@ -6,7 +6,9 @@ defmodule GitServer.CountingStore do
   @behaviour GitServer.Store
   alias GitServer.Store
 
-  def wrap(store), do: {__MODULE__, %{inner: store, counts: :counters.new(3, [])}}
+  def wrap(store) do
+    {__MODULE__, %{inner: store, counts: :counters.new(3, [])}}
+  end
 
   @doc "The calls so far: `%{gets: n, get_files: n, deletes: n}`."
   def counts({__MODULE__, %{counts: counts}}) do
@@ -37,11 +39,14 @@ defmodule GitServer.CountingStore do
   end
 
   @impl true
-  def put(config, key, body, condition), do: Store.put(config.inner, key, body, condition)
+  def put(config, key, body, condition) do
+    Store.put(config.inner, key, body, condition)
+  end
 
   @impl true
-  def put_file(config, key, path, condition),
-    do: Store.put_file(config.inner, key, path, condition)
+  def put_file(config, key, path, condition) do
+    Store.put_file(config.inner, key, path, condition)
+  end
 
   @impl true
   def delete(config, key) do
@@ -50,8 +55,12 @@ defmodule GitServer.CountingStore do
   end
 
   @impl true
-  def list(config, prefix), do: Store.list(config.inner, prefix)
+  def list(config, prefix) do
+    Store.list(config.inner, prefix)
+  end
 
   @impl true
-  def describe(config), do: Store.describe(config.inner)
+  def describe(config) do
+    Store.describe(config.inner)
+  end
 end

@@ -14,7 +14,9 @@ defmodule GitServer.PktLine do
   @max_band_data @max_data - 1
 
   @doc "The largest data a single packet can carry."
-  def max_data, do: @max_data
+  def max_data do
+    @max_data
+  end
 
   @doc "Encodes one data packet. Raises for empty or oversized data."
   def encode(data) do
@@ -27,9 +29,17 @@ defmodule GitServer.PktLine do
     [hex_length(size + 4), data]
   end
 
-  def flush, do: "0000"
-  def delim, do: "0001"
-  def response_end, do: "0002"
+  def flush do
+    "0000"
+  end
+
+  def delim do
+    "0001"
+  end
+
+  def response_end do
+    "0002"
+  end
 
   @doc """
   An `ERR <message>` packet, which git shows as a remote error. A message too long
@@ -62,9 +72,17 @@ defmodule GitServer.PktLine do
   Decodes the first packet of `binary`: `{:ok, packet, rest}`, `:incomplete` when
   more bytes are needed, or `{:error, reason}` for a malformed length.
   """
-  def decode_one(<<"0000", rest::binary>>), do: {:ok, :flush, rest}
-  def decode_one(<<"0001", rest::binary>>), do: {:ok, :delim, rest}
-  def decode_one(<<"0002", rest::binary>>), do: {:ok, :response_end, rest}
+  def decode_one(<<"0000", rest::binary>>) do
+    {:ok, :flush, rest}
+  end
+
+  def decode_one(<<"0001", rest::binary>>) do
+    {:ok, :delim, rest}
+  end
+
+  def decode_one(<<"0002", rest::binary>>) do
+    {:ok, :response_end, rest}
+  end
 
   def decode_one(<<hex::binary-size(4), rest::binary>>) do
     case parse_length(hex) do
@@ -85,7 +103,9 @@ defmodule GitServer.PktLine do
     end
   end
 
-  def decode_one(_short), do: :incomplete
+  def decode_one(_short) do
+    :incomplete
+  end
 
   @doc """
   Decodes a whole binary into packets: `{:ok, packets}`, or `{:error, reason}` when

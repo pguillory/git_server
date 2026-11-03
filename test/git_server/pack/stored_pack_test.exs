@@ -3,8 +3,11 @@ defmodule GitServer.Pack.StoredPackTest do
 
   import GitServer.PackBuilder
 
-  alias GitServer.{ObjectDB, ObjectId, Pack}
-  alias GitServer.Pack.{Delta, Idx}
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Pack
+  alias GitServer.Pack.Delta
+  alias GitServer.Pack.Idx
 
   @moduletag :tmp_dir
 

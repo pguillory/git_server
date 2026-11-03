@@ -3,7 +3,10 @@ defmodule GitServer.ForcePushTest do
   # branches and moved tags, and what clones see afterwards.
   use ExUnit.Case, async: true
   import GitServer.TestGit
-  alias GitServer.{RacingStore, Repository, Store, TestServer}
+  alias GitServer.RacingStore
+  alias GitServer.Repository
+  alias GitServer.Store
+  alias GitServer.TestServer
 
   @moduletag :tmp_dir
 

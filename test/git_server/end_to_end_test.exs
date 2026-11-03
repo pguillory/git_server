@@ -23,9 +23,17 @@ defmodule GitServer.EndToEndTest do
       [store: :persistent_term.get(__MODULE__), authorize: &authorize/1]
     end
 
-    defp authorize(%{repo: "team/notes", credentials: {"user", "secret"}}), do: :ok
-    defp authorize(%{repo: "team/notes"}), do: :unauthorized
-    defp authorize(_request), do: :forbidden
+    defp authorize(%{repo: "team/notes", credentials: {"user", "secret"}}) do
+      :ok
+    end
+
+    defp authorize(%{repo: "team/notes"}) do
+      :unauthorized
+    end
+
+    defp authorize(_request) do
+      :forbidden
+    end
   end
 
   defp commit!(dir, file, content, message) do

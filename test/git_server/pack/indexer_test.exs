@@ -4,8 +4,12 @@ defmodule GitServer.Pack.IndexerTest do
   import GitServer.LocalGit
   import GitServer.PackBuilder
 
-  alias GitServer.{GitFixture, Object, ObjectDB, ObjectId}
-  alias GitServer.Pack.{Indexer, Writer}
+  alias GitServer.GitFixture
+  alias GitServer.Object
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Pack.Indexer
+  alias GitServer.Pack.Writer
 
   setup_all do
     home = tmp_dir!("indexer")
@@ -279,7 +283,9 @@ defmodule GitServer.Pack.IndexerTest do
 
   # Content whose Adler-32 is `target` and which ends with `target`'s 4 bytes, so a
   # stored zlib stream of it holds the trailer twice in a row.
-  defp self_adler(target), do: self_adler_with("", target)
+  defp self_adler(target) do
+    self_adler_with("", target)
+  end
 
   # Filler, then `suffix`, then `target`, with an Adler-32 of `target`. Appending
   # bytes c_0..c_(l-1) to a state (a, b) gives a + sum(c) and
@@ -306,7 +312,9 @@ defmodule GitServer.Pack.IndexerTest do
   end
 
   # Modular inverse by Fermat's little theorem (m is prime).
-  defp inverse(a, m), do: :binary.decode_unsigned(:crypto.mod_pow(a, m - 2, m))
+  defp inverse(a, m) do
+    :binary.decode_unsigned(:crypto.mod_pow(a, m - 2, m))
+  end
 
   defp assert_indexes(f, entries) do
     {pack, idx_entries} = build(entries)

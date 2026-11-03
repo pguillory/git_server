@@ -5,7 +5,8 @@ defmodule GitServer.ErrorsTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
   import GitServer.TestGit
-  alias GitServer.{OutageStore, TestServer}
+  alias GitServer.OutageStore
+  alias GitServer.TestServer
 
   @moduletag :tmp_dir
 

@@ -37,8 +37,13 @@ defmodule GitServer.Pack.Delta do
     end
   end
 
-  defp varint(_binary, _value, shift) when shift > 63, do: {:error, "bad delta header"}
-  defp varint(<<>>, _value, _shift), do: {:error, "bad delta header"}
+  defp varint(_binary, _value, shift) when shift > 63 do
+    {:error, "bad delta header"}
+  end
+
+  defp varint(<<>>, _value, _shift) do
+    {:error, "bad delta header"}
+  end
 
   defp varint(<<byte, rest::binary>>, value, shift) do
     value = bor(value, band(byte, 0x7F) <<< shift)
@@ -47,9 +52,17 @@ defmodule GitServer.Pack.Delta do
 
   # The result grows by appending to one binary, which the VM does in place, so a
   # delta of many tiny instructions costs no more memory than its result.
-  defp run(<<>>, _base, size, acc) when byte_size(acc) == size, do: {:ok, acc}
-  defp run(<<>>, _base, _size, _acc), do: {:error, "delta result size mismatch"}
-  defp run(<<0, _::binary>>, _base, _size, _acc), do: {:error, "bad delta instruction"}
+  defp run(<<>>, _base, size, acc) when byte_size(acc) == size do
+    {:ok, acc}
+  end
+
+  defp run(<<>>, _base, _size, _acc) do
+    {:error, "delta result size mismatch"}
+  end
+
+  defp run(<<0, _::binary>>, _base, _size, _acc) do
+    {:error, "bad delta instruction"}
+  end
 
   defp run(<<cmd, rest::binary>>, base, size, acc) when cmd >= 0x80 do
     with {:ok, offset, rest} <- copy_arg(cmd, rest, 0, 0, 4),
@@ -78,7 +91,9 @@ defmodule GitServer.Pack.Delta do
   end
 
   # Little-endian bytes, present when the matching bit of `bits` is set.
-  defp copy_arg(_bits, rest, value, i, i), do: {:ok, value, rest}
+  defp copy_arg(_bits, rest, value, i, i) do
+    {:ok, value, rest}
+  end
 
   defp copy_arg(bits, rest, value, i, n) do
     if band(bits, 1 <<< i) == 0 do

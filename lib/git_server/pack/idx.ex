@@ -87,7 +87,9 @@ defmodule GitServer.Pack.Idx do
     end
   end
 
-  def decode(_), do: {:error, "not a version 2 pack index"}
+  def decode(_) do
+    {:error, "not a version 2 pack index"}
+  end
 
   defp large_offsets_valid?(binary, start, count, large_count) do
     offsets = binary_part(binary, start, count * 4)
@@ -121,7 +123,9 @@ defmodule GitServer.Pack.Idx do
   end
 
   @doc "Whether the pack holds `id`."
-  def member?(idx, id), do: offset(idx, id) != :error
+  def member?(idx, id) do
+    offset(idx, id) != :error
+  end
 
   @doc "Every `{id, offset}` in the index, in id order."
   @spec entries(t) :: [{ObjectId.t(), non_neg_integer}]
@@ -141,7 +145,9 @@ defmodule GitServer.Pack.Idx do
     n
   end
 
-  defp search(_idx, _id, low, high) when low > high, do: nil
+  defp search(_idx, _id, low, high) when low > high do
+    nil
+  end
 
   defp search(idx, id, low, high) do
     mid = div(low + high, 2)

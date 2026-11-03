@@ -7,7 +7,9 @@ defmodule GitServer.Seed do
   """
 
   import GitServer.LocalGit
-  alias GitServer.{Repository, State, Store}
+  alias GitServer.Repository
+  alias GitServer.State
+  alias GitServer.Store
 
   @doc "An empty source repository under `dir`."
   def source!(dir) do

@@ -3,7 +3,10 @@ defmodule GitServer.ReceivePackTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
   import GitServer.TestGit
-  alias GitServer.{FailingStore, Repository, Store, TestServer}
+  alias GitServer.FailingStore
+  alias GitServer.Repository
+  alias GitServer.Store
+  alias GitServer.TestServer
 
   @moduletag :tmp_dir
 

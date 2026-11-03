@@ -79,23 +79,33 @@ defmodule CloneCurve do
     end
 
     @impl true
-    def put(config, key, body, condition), do: Store.put(config.inner, key, body, condition)
+    def put(config, key, body, condition) do
+      Store.put(config.inner, key, body, condition)
+    end
 
     @impl true
-    def put_file(config, key, path, condition),
-      do: Store.put_file(config.inner, key, path, condition)
+    def put_file(config, key, path, condition) do
+      Store.put_file(config.inner, key, path, condition)
+    end
 
     @impl true
-    def delete(config, key), do: Store.delete(config.inner, key)
+    def delete(config, key) do
+      Store.delete(config.inner, key)
+    end
 
     @impl true
-    def list(config, prefix), do: Store.list(config.inner, prefix)
+    def list(config, prefix) do
+      Store.list(config.inner, prefix)
+    end
 
     @impl true
-    def describe(config), do: "counting " <> Store.describe(config.inner)
+    def describe(config) do
+      "counting " <> Store.describe(config.inner)
+    end
   end
 
-  alias GitServer.{Repository, Store}
+  alias GitServer.Repository
+  alias GitServer.Store
   alias GitServer.Pack.Indexer
 
   @repo "rules"
@@ -172,7 +182,9 @@ defmodule CloneCurve do
     store
   end
 
-  defp random, do: Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+  defp random do
+    Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+  end
 
   defp run_options(store, run) do
     authorize = fn
@@ -183,7 +195,9 @@ defmodule CloneCurve do
     [store: store, authorize: authorize, pack_cache_dir: run.pack_cache && run.cache_dir]
   end
 
-  defp plug_options(run), do: run_options(run.store, run)
+  defp plug_options(run) do
+    run_options(run.store, run)
+  end
 
   defp serve(options) do
     {:ok, pid} =
@@ -262,8 +276,13 @@ defmodule CloneCurve do
     end
   end
 
-  defp merged(%{merged: n}), do: ", #{n} merged"
-  defp merged(other), do: ", #{other}"
+  defp merged(%{merged: n}) do
+    ", #{n} merged"
+  end
+
+  defp merged(other) do
+    ", #{other}"
+  end
 
   defp timed_push!(run) do
     before = CountingStore.read(run.store)
@@ -294,8 +313,13 @@ defmodule CloneCurve do
     end
   end
 
-  defp inner({_mod, config}), do: config.inner
-  defp inner(%{store: store}), do: inner(store)
+  defp inner({_mod, config}) do
+    config.inner
+  end
+
+  defp inner(%{store: store}) do
+    inner(store)
+  end
 
   defp commit!(run, count) do
     if count == 1 do
@@ -324,10 +348,13 @@ defmodule CloneCurve do
     end
   end
 
-  defp rule_path(run, file), do: Path.join(run.local, "rules/rule-#{file}.txt")
+  defp rule_path(run, file) do
+    Path.join(run.local, "rules/rule-#{file}.txt")
+  end
 
-  defp line(file, line_no, note),
-    do: "rule #{file} clause #{line_no}: allow this action, #{note}\n"
+  defp line(file, line_no, note) do
+    "rule #{file} clause #{line_no}: allow this action, #{note}\n"
+  end
 
   # The pack `git push` would send for the newest commit, with send-pack's arguments
   # (thin packs off, since the server advertises no-thin).

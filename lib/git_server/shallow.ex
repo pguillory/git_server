@@ -27,7 +27,10 @@ defmodule GitServer.Shallow do
   fetched, stays in the client's `.git/shallow`.
   """
 
-  alias GitServer.{Object, ObjectDB, ObjectId, ObjectWalk}
+  alias GitServer.Object
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.ObjectWalk
 
   # git's INFINITE_DEPTH, what `git fetch --unshallow` sends.
   @max_depth 0x7FFFFFFF
@@ -48,7 +51,9 @@ defmodule GitServer.Shallow do
         }
 
   @doc "The largest `deepen` a client may send."
-  def max_depth, do: @max_depth
+  def max_depth do
+    @max_depth
+  end
 
   @doc """
   The client's `shallow` commits that the repository holds. As git does, one it lacks
@@ -202,7 +207,9 @@ defmodule GitServer.Shallow do
 
   # The client's shallow commits some ref reaches. A walk of the whole graph, but only
   # for `deepen-relative`.
-  defp reachable_shallows(_db, _tips, []), do: {:ok, []}
+  defp reachable_shallows(_db, _tips, []) do
+    {:ok, []}
+  end
 
   defp reachable_shallows(db, tips, shallows) do
     with {:ok, not_found} <- ObjectWalk.find(db, tips, MapSet.new(shallows)) do
@@ -226,7 +233,9 @@ defmodule GitServer.Shallow do
     end
   end
 
-  defp peel(_db, _id, 0), do: {:ok, nil}
+  defp peel(_db, _id, 0) do
+    {:ok, nil}
+  end
 
   defp peel(db, id, n) do
     case ObjectDB.lookup(db, id) do
@@ -314,9 +323,13 @@ defmodule GitServer.Shallow do
   end
 
   # What follows the last `byte` in `binary`, found scanning back from the end.
-  defp after_last(binary, byte), do: after_last(binary, byte, byte_size(binary))
+  defp after_last(binary, byte) do
+    after_last(binary, byte, byte_size(binary))
+  end
 
-  defp after_last(_binary, _byte, 0), do: :error
+  defp after_last(_binary, _byte, 0) do
+    :error
+  end
 
   defp after_last(binary, byte, i) do
     case :binary.at(binary, i - 1) do

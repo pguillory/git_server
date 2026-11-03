@@ -6,16 +6,14 @@ defmodule GitServer.UploadPackTest do
   import GitServer.TestGit
   import Plug.Conn, only: [put_req_header: 3]
 
-  alias GitServer.{
-    GitFixture,
-    ObjectId,
-    PackBuilder,
-    PktLine,
-    Repository,
-    Seed,
-    Store,
-    TestServer
-  }
+  alias GitServer.GitFixture
+  alias GitServer.ObjectId
+  alias GitServer.PackBuilder
+  alias GitServer.PktLine
+  alias GitServer.Repository
+  alias GitServer.Seed
+  alias GitServer.Store
+  alias GitServer.TestServer
 
   @moduletag :tmp_dir
 

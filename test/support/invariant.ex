@@ -6,7 +6,10 @@ defmodule GitServer.Invariant do
   """
 
   import ExUnit.Assertions
-  alias GitServer.{Object, ObjectDB, ObjectId, Repository}
+  alias GitServer.Object
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
+  alias GitServer.Repository
   alias GitServer.Pack.Idx
 
   def check!(store, repo, tmp_dir) do

@@ -18,7 +18,8 @@ defmodule GitServer.Pack.Reader do
   """
 
   alias GitServer.Pack
-  alias GitServer.Pack.{Cache, Delta}
+  alias GitServer.Pack.Cache
+  alias GitServer.Pack.Delta
 
   @chunk 65_536
   @max_header 40
@@ -29,11 +30,14 @@ defmodule GitServer.Pack.Reader do
   @doc false
   # A budget of bytes inflated and produced by deltas, shared by everything that
   # charges it, failing with `message` once spent. `nil` means unlimited.
-  def new_budget(max, message \\ "pack needs too much work to index"),
-    do: {:counters.new(1, []), max, message}
+  def new_budget(max, message \\ "pack needs too much work to index") do
+    {:counters.new(1, []), max, message}
+  end
 
   @doc false
-  def charge(nil, _bytes), do: :ok
+  def charge(nil, _bytes) do
+    :ok
+  end
 
   def charge({ref, max, message}, bytes) do
     :counters.add(ref, 1, bytes)
@@ -43,13 +47,23 @@ defmodule GitServer.Pack.Reader do
 
   @doc false
   # Charges a budget without checking it.
-  def add(nil, _bytes), do: :ok
-  def add({ref, _max, _message}, bytes), do: :counters.add(ref, 1, bytes)
+  def add(nil, _bytes) do
+    :ok
+  end
+
+  def add({ref, _max, _message}, bytes) do
+    :counters.add(ref, 1, bytes)
+  end
 
   @doc false
   # Credits a budget and checks it.
-  def settle(nil, _credit), do: :ok
-  def settle(budget, credit), do: charge(budget, -credit)
+  def settle(nil, _credit) do
+    :ok
+  end
+
+  def settle(budget, credit) do
+    charge(budget, -credit)
+  end
 
   @doc "Parses the entry header at `offset`."
   def entry(%__MODULE__{} = r, offset) do
@@ -72,7 +86,9 @@ defmodule GitServer.Pack.Reader do
   end
 
   @doc "Reads the object at `offset`, returning `{type, content}`."
-  def read(%__MODULE__{} = r, offset), do: walk(r, offset, [], 0)
+  def read(%__MODULE__{} = r, offset) do
+    walk(r, offset, [], 0)
+  end
 
   @doc "The type and size of the object at `offset`, without inflating a whole object."
   def type_and_size(%__MODULE__{} = r, offset) do
@@ -127,8 +143,13 @@ defmodule GitServer.Pack.Reader do
   end
 
   # Counting depth also stops a cycle of REF_DELTAs.
-  defp base_offset(r, _e, depth) when depth >= r.max_delta_depth, do: fail("delta chain too deep")
-  defp base_offset(_r, %{kind: {:ofs, base}}, _depth), do: base
+  defp base_offset(r, _e, depth) when depth >= r.max_delta_depth do
+    fail("delta chain too deep")
+  end
+
+  defp base_offset(_r, %{kind: {:ofs, base}}, _depth) do
+    base
+  end
 
   defp base_offset(r, %{kind: {:ref, id}}, _depth) do
     case r.ref.(id) do
@@ -175,13 +196,17 @@ defmodule GitServer.Pack.Reader do
   end
 
   # zlib's work follows its input as well as its output (empty stored blocks).
-  defp inflate_work(e), do: max(e.size, e.stop - e.start)
+  defp inflate_work(e) do
+    max(e.size, e.stop - e.start)
+  end
 
-  defp inflate_range(_fd, _z, pos, stop, size, size, acc) when pos >= stop,
-    do: IO.iodata_to_binary(Enum.reverse(acc))
+  defp inflate_range(_fd, _z, pos, stop, size, size, acc) when pos >= stop do
+    IO.iodata_to_binary(Enum.reverse(acc))
+  end
 
-  defp inflate_range(_fd, _z, pos, stop, _size, _n, _acc) when pos >= stop,
-    do: fail("object size mismatch")
+  defp inflate_range(_fd, _z, pos, stop, _size, _n, _acc) when pos >= stop do
+    fail("object size mismatch")
+  end
 
   defp inflate_range(fd, z, pos, stop, size, n, acc) do
     chunk = pread(fd, pos, min(@chunk, stop - pos))
@@ -201,8 +226,9 @@ defmodule GitServer.Pack.Reader do
     with_inflater(fn z -> prefix(r.fd, z, e.start, e.stop, want, <<>>) end)
   end
 
-  defp prefix(_fd, _z, pos, stop, want, have) when byte_size(have) >= want or pos >= stop,
-    do: have
+  defp prefix(_fd, _z, pos, stop, want, have) when byte_size(have) >= want or pos >= stop do
+    have
+  end
 
   defp prefix(fd, z, pos, stop, want, have) do
     chunk = pread(fd, pos, min(@chunk, stop - pos))
@@ -255,5 +281,7 @@ defmodule GitServer.Pack.Reader do
   end
 
   @doc false
-  def fail(reason), do: throw({:pack_error, reason})
+  def fail(reason) do
+    throw({:pack_error, reason})
+  end
 end

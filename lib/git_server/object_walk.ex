@@ -5,7 +5,8 @@ defmodule GitServer.ObjectWalk do
   and are not followed. Blobs are only checked for presence, never read.
   """
 
-  alias GitServer.{ObjectDB, ObjectId}
+  alias GitServer.ObjectDB
+  alias GitServer.ObjectId
 
   @doc """
   Every object reachable from `roots`, not going through any id in the set `exclude`:
@@ -63,7 +64,9 @@ defmodule GitServer.ObjectWalk do
   end
 
   # Only a commit links to commits, and the cut only names commits.
-  defp without_parents(links), do: Enum.reject(links, &match?({:commit, _id}, &1))
+  defp without_parents(links) do
+    Enum.reject(links, &match?({:commit, _id}, &1))
+  end
 
   defp links(db, :blob, id) do
     if ObjectDB.member?(db, id), do: {:ok, []}, else: missing(id)

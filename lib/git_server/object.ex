@@ -17,23 +17,45 @@ defmodule GitServer.Object do
   @types [:commit, :tree, :blob, :tag]
 
   @doc "The four object types."
-  def types, do: @types
+  def types do
+    @types
+  end
 
   @doc "The type's name as git writes it."
-  def type_name(type) when type in @types, do: Atom.to_string(type)
+  def type_name(type) when type in @types do
+    Atom.to_string(type)
+  end
 
   @doc "Parses a type name, or returns `:error`."
-  def parse_type("commit"), do: {:ok, :commit}
-  def parse_type("tree"), do: {:ok, :tree}
-  def parse_type("blob"), do: {:ok, :blob}
-  def parse_type("tag"), do: {:ok, :tag}
-  def parse_type(_), do: :error
+  def parse_type("commit") do
+    {:ok, :commit}
+  end
+
+  def parse_type("tree") do
+    {:ok, :tree}
+  end
+
+  def parse_type("blob") do
+    {:ok, :blob}
+  end
+
+  def parse_type("tag") do
+    {:ok, :tag}
+  end
+
+  def parse_type(_) do
+    :error
+  end
 
   @doc "The header hashed in front of an object's content."
-  def header(type, size), do: [type_name(type), ?\s, Integer.to_string(size), 0]
+  def header(type, size) do
+    [type_name(type), ?\s, Integer.to_string(size), 0]
+  end
 
   @doc "An object's id."
-  def id(type, content), do: ObjectId.hash([header(type, byte_size(content)), content])
+  def id(type, content) do
+    ObjectId.hash([header(type, byte_size(content)), content])
+  end
 
   @doc """
   The objects `content` points to, each with the type it must have.
@@ -50,7 +72,9 @@ defmodule GitServer.Object do
           {:ok, [link]} | {:error, String.t()}
   def parse_links(type, content, max \\ :infinity)
 
-  def parse_links(:blob, _content, _max), do: {:ok, []}
+  def parse_links(:blob, _content, _max) do
+    {:ok, []}
+  end
 
   def parse_links(:commit, content, max) do
     with {:ok, tree, rest} <- header_id(content, "tree"),
@@ -76,13 +100,17 @@ defmodule GitServer.Object do
     end
   end
 
-  def parse_links(:tree, content, max), do: tree_links(content, [], 0, max)
+  def parse_links(:tree, content, max) do
+    tree_links(content, [], 0, max)
+  end
 
   @doc """
   The bound on a peel's steps from a ref, far more than anyone writes: `GitServer.Push`
   counts tags, a commit and its tree against it, and ls-refs the tags alone.
   """
-  def max_peel, do: 12
+  def max_peel do
+    12
+  end
 
   @doc """
   A tree's entries in order, each `{kind, name, id}`: `kind` is `:tree`, `:file`,
@@ -92,7 +120,9 @@ defmodule GitServer.Object do
   @spec tree_entries(binary) ::
           {:ok, [{:tree | :file | :executable | :symlink | :submodule, binary, ObjectId.t()}]}
           | {:error, String.t()}
-  def tree_entries(content), do: tree_entries(content, [])
+  def tree_entries(content) do
+    tree_entries(content, [])
+  end
 
   defp tree_entries(content, acc) do
     case next_entry(content) do
@@ -127,8 +157,13 @@ defmodule GitServer.Object do
   end
 
   # Whether `n` links fit within `max`.
-  defp room(n, max) when n <= max, do: :ok
-  defp room(_n, _max), do: :too_many
+  defp room(n, max) when n <= max do
+    :ok
+  end
+
+  defp room(_n, _max) do
+    :too_many
+  end
 
   defp header_id(content, field) do
     hex_size = ObjectId.size() * 2
@@ -151,7 +186,9 @@ defmodule GitServer.Object do
     end
   end
 
-  defp parents(_content, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
+  defp parents(_content, acc, _n, _max) do
+    {:ok, Enum.reverse(acc)}
+  end
 
   defp tree_links(content, acc, n, max) do
     case next_entry(content) do
@@ -175,7 +212,9 @@ defmodule GitServer.Object do
   # The tree entry at the start of `content`: `{:ok, kind, mode, name, id, rest}`, with
   # `kind` from `entry_kind/1` and `name` and `id` still sub-binaries of `content`,
   # `:done` at the end, or `:error`.
-  defp next_entry(<<>>), do: :done
+  defp next_entry(<<>>) do
+    :done
+  end
 
   defp next_entry(content) do
     id_size = ObjectId.size()

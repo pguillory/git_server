@@ -14,8 +14,13 @@ defmodule GitServer.Failure do
     "raised #{inspect(exception.__struct__)}\n" <> locations(stacktrace)
   end
 
-  def describe(:throw, _value, stacktrace), do: "threw\n" <> locations(stacktrace)
-  def describe(:exit, _reason, stacktrace), do: "exited\n" <> locations(stacktrace)
+  def describe(:throw, _value, stacktrace) do
+    "threw\n" <> locations(stacktrace)
+  end
+
+  def describe(:exit, _reason, stacktrace) do
+    "exited\n" <> locations(stacktrace)
+  end
 
   @doc """
   Runs `fun`, turning a raise, throw or exit into `{:error, "<what> <description>"}`,

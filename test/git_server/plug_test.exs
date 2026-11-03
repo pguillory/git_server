@@ -1,7 +1,9 @@
 defmodule GitServer.PlugTest do
   use ExUnit.Case, async: true
   import GitServer.TestGit
-  alias GitServer.{Repository, State, TestServer}
+  alias GitServer.Repository
+  alias GitServer.State
+  alias GitServer.TestServer
 
   @commit "1111111111111111111111111111111111111111"
   @tag_id "2222222222222222222222222222222222222222"

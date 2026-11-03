@@ -3,7 +3,11 @@ defmodule GitServer.BeforeUpdateTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
   import GitServer.TestGit
-  alias GitServer.{Push, Repository, State, Store, TestServer}
+  alias GitServer.Push
+  alias GitServer.Repository
+  alias GitServer.State
+  alias GitServer.Store
+  alias GitServer.TestServer
 
   @moduletag :tmp_dir
 
@@ -178,7 +182,9 @@ defmodule GitServer.BeforeUpdateTest do
     }
   end
 
-  defp only({:ok, files}, path), do: {:ok, Enum.filter(files, &(&1.path == path))}
+  defp only({:ok, files}, path) do
+    {:ok, Enum.filter(files, &(&1.path == path))}
+  end
 
   test "failing checks refuse the push and log no content", %{tmp_dir: tmp_dir} do
     checks = [
@@ -446,7 +452,9 @@ defmodule GitServer.BeforeUpdateTest do
     write_object!(dir, tmp_dir, "tree", content)
   end
 
-  defp blob!(dir, tmp_dir, content), do: write_object!(dir, tmp_dir, "blob", content)
+  defp blob!(dir, tmp_dir, content) do
+    write_object!(dir, tmp_dir, "blob", content)
+  end
 
   defp write_object!(dir, tmp_dir, type, content) do
     path = Path.join(tmp_dir, "object")
