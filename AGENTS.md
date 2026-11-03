@@ -27,11 +27,62 @@ supplies the store configuration and an `authorize` callback, and holds every se
   no system or global config, no credential helper, no terminal prompt), so a test
   can never touch a developer's keychain or prompt.
 - Keep tests simple, fast and single-layer, with real collaborators. A passing run
-  prints only dots: no `capture_log` silencing, and an error log means a bug.
+  prints only dots, and an error log means a bug.
 - Anything a test or tool serves binds to 127.0.0.1 only.
 - Generic mechanisms belong in generic layers: conditional writes live in the store,
   not in the refs code.
 - Never log credentials, Authorization headers, or S3 response bodies and headers.
+
+## Conventions
+
+Tests:
+
+- A test file named for a module tests that module directly: it imports the module
+  and calls it unqualified. A test that goes through git or HTTP is named for what it
+  exercises (`git_push_test.exs`, `serving_test.exs`) and stays end to end.
+- Test modules are async. `capture_log` is only for asserting a line the server must
+  log, never for silencing one, and only in a module with `async: false` that says
+  why above `use ExUnit.Case`, since in an async module it also catches other tests'
+  lines. Those modules are `host_failure_test.exs` and `storage_failure_test.exs`.
+- No store wrapper that makes calls fail, and no state put in the store that the
+  library's own API couldn't produce, except as listed under exceptions below. A
+  wrapper that only counts or paces calls (`CountingStore`, the repository test's
+  `GateStore`) is fine.
+- No test waits out a timeout or kills a process. Tests that run for minutes are
+  tagged `:slow` and excluded by default; `mix test --include slow` runs them, and
+  is worth running after a change to pushing, fetching or compaction.
+
+Code:
+
+- Every `def`, `defp` and `defmacro` uses `do...end`, never `, do:`, and each alias
+  gets its own line, never `alias A.{B, C}`. `test/git_server/style_test.exs` checks
+  both.
+- Expected failures are returned as values (`{:error, reason}`), not raised or
+  thrown. Every remaining `catch` or `rescue` has a comment saying why.
+
+Deliberate exceptions:
+
+1. Host functions: `config`, `authorize`, `before_update` and `after_update` are the
+   host's code, outside this library's control, so a raise, throw or exit in one is
+   caught. The request is refused (`after_update`'s push stands) and the failure is
+   logged by kind only (`GitServer.Failure`), since these functions see credentials,
+   store options and pushed content, and their failures may quote them.
+   `host_failure_test.exs` checks the refusal and that the log quotes none of it.
+2. Corrupt bucket data: the bucket is external storage that an operator can edit or
+   damage, so tests may write corrupt or mismatched data to it directly (a garbage
+   `state`, a pack with a byte changed, another pack's idx, a listed pack deleted)
+   to check that the server refuses it.
+3. Races: `RacingStore` runs another push or compaction just before a request's
+   conditional state write (or after its state read), the one moment the race
+   tests of pushes and compaction need and concurrent clients really produce, which
+   real git can't be made to hit on demand. It changes the repository only through
+   the library's API and never fails a call.
+4. The pack parser's abort: corrupt or oversized pack data, from a client or from
+   the bucket, aborts a parse deep inside `GitServer.Pack.Reader` by throwing
+   `{:pack_error, reason}` (`Reader.fail/1`). Each entry point into the pack code
+   (`GitServer.ObjectDB`, `GitServer.Pack.Indexer`, `GitServer.Pack.Merge`) catches
+   it and returns `{:error, reason}`. Returning a value from every step instead
+   would thread a result through each read and inflate in the parsers' inner loops.
 
 ## Modules
 
@@ -80,7 +131,8 @@ supplies the store configuration and an `authorize` callback, and holds every se
 Failures git can meet after `info/refs` are answered in-protocol (git shows an HTTP
 error body only on the first request): `ERR` for upload-pack, report-status for push. The
 README's "When something goes wrong" table lists what git prints, and
-`test/git_server/errors_test.exs` keeps it true.
+`test/git_server/errors_test.exs` keeps it true, with `host_failure_test.exs` and
+`storage_failure_test.exs` for the rows the server also logs.
 
 ## Tests
 
