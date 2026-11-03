@@ -4,14 +4,17 @@ defmodule GitServer.ObjectDB do
 
   Open it in the process that will use it: it holds that process's file handles and a
   private cache of resolved delta bases, and both go away with the process or with
-  `close/1`. Nothing here raises on a hostile or corrupt pack; errors come back as
-  `{:error, reason}` with a human-readable reason.
+  `close/1`. However many packs it reads, it keeps at most `:max_open_files` of them
+  open at once, reopening others as reads reach them. Nothing here raises on a
+  hostile or corrupt pack; errors come back as `{:error, reason}` with a
+  human-readable reason.
 
   Options, for `open/2`:
 
     * `:max_object_bytes` - the largest object (or delta) to inflate (default 50 MB)
     * `:max_delta_depth` - the longest delta chain to follow (default 100)
     * `:cache_bytes` - the size of the resolved-base cache (default 32 MB)
+    * `:max_open_files` - the most pack files held open at once (default 16)
     * `:max_base_work_bytes` - a cap on the work of resolving delta bases under the
       objects read (bytes inflated and produced by deltas: what cache misses cost,
       never the work of producing the objects themselves), across every read. Each
@@ -29,9 +32,9 @@ defmodule GitServer.ObjectDB do
   require Logger
 
   alias GitServer.{Object, ObjectId, Pack}
-  alias GitServer.Pack.{Cache, Idx, Reader}
+  alias GitServer.Pack.{Cache, Files, Idx, Reader}
 
-  defstruct [:packs, :cache, :names, :log_label, :logged]
+  defstruct [:packs, :cache, :files, :names, :log_label, :logged]
 
   @type t :: %__MODULE__{}
 
@@ -39,6 +42,7 @@ defmodule GitServer.ObjectDB do
     max_object_bytes: 50_000_000,
     max_delta_depth: 100,
     cache_bytes: 32_000_000,
+    max_open_files: 16,
     max_base_work_bytes: nil,
     log_label: nil,
   ]
@@ -54,6 +58,7 @@ defmodule GitServer.ObjectDB do
   @spec open([{Path.t(), Path.t()}], keyword) :: {:ok, t} | {:error, String.t()}
   def open(packs, opts \\ []) do
     opts = Keyword.merge(@defaults, opts)
+    files = Files.new(opts[:max_open_files])
     cache = Cache.new(opts[:cache_bytes])
 
     opts =
@@ -68,13 +73,13 @@ defmodule GitServer.ObjectDB do
       packs
       |> Enum.with_index()
       |> Enum.reduce_while({:ok, []}, fn {{pack_path, idx_path}, key}, {:ok, acc} ->
-        case open_pack(pack_path, idx_path, key, cache, opts) do
+        case open_pack(pack_path, idx_path, key, cache, files, opts) do
           {:ok, pack} ->
             {:cont, {:ok, [pack | acc]}}
 
           {:error, reason} ->
             log(opts[:log_label], pack_path, reason)
-            {:halt, {:error, reason, acc}}
+            {:halt, {:error, reason}}
         end
       end)
 
@@ -86,41 +91,38 @@ defmodule GitServer.ObjectDB do
          %__MODULE__{
            packs: Enum.reverse(acc),
            cache: cache,
+           files: files,
            names: List.to_tuple(names),
            log_label: opts[:log_label],
            logged: :atomics.new(1, []),
          }}
 
-      {:error, reason, acc} ->
-        Enum.each(acc, fn {_idx, reader} -> File.close(reader.fd) end)
+      {:error, reason} ->
+        Files.close(files)
         Cache.delete(cache)
         {:error, reason}
     end
   end
 
-  defp open_pack(pack_path, idx_path, key, cache, opts) do
+  # The pack is opened through the set of open files, which may close it again once
+  # later packs are opened; reads reopen it there as they need it.
+  defp open_pack(pack_path, idx_path, key, cache, files, opts) do
     with {:ok, idx_binary} <- read_file(idx_path),
          {:ok, idx} <- Idx.decode(idx_binary),
-         {:ok, fd} <- open_file(pack_path) do
-      case check_pack(fd, idx) do
-        {:ok, ends} ->
-          reader = %Reader{
-            fd: fd,
-            key: key,
-            ends: ends,
-            ref: &Idx.offset(idx, &1),
-            cache: cache,
-            base_budget: opts[:base_budget],
-            max_object_bytes: opts[:max_object_bytes],
-            max_delta_depth: opts[:max_delta_depth],
-          }
+         {:ok, fd} <- open_file(files, key, pack_path),
+         {:ok, ends} <- check_pack(fd, idx) do
+      reader = %Reader{
+        fd: nil,
+        key: key,
+        ends: ends,
+        ref: &Idx.offset(idx, &1),
+        cache: cache,
+        base_budget: opts[:base_budget],
+        max_object_bytes: opts[:max_object_bytes],
+        max_delta_depth: opts[:max_delta_depth],
+      }
 
-          {:ok, {idx, reader}}
-
-        {:error, reason} ->
-          File.close(fd)
-          {:error, reason}
-      end
+      {:ok, {idx, reader}}
     end
   end
 
@@ -131,8 +133,8 @@ defmodule GitServer.ObjectDB do
     end
   end
 
-  defp open_file(path) do
-    case :file.open(path, [:read, :raw, :binary]) do
+  defp open_file(files, key, path) do
+    case Files.fd(files, key, path) do
       {:ok, fd} -> {:ok, fd}
       {:error, reason} -> {:error, "cannot open pack: #{:file.format_error(reason)}"}
     end
@@ -172,8 +174,8 @@ defmodule GitServer.ObjectDB do
   end
 
   @doc "Closes the pack files and drops the cache."
-  def close(%__MODULE__{packs: packs, cache: cache}) do
-    Enum.each(packs, fn {_idx, reader} -> File.close(reader.fd) end)
+  def close(%__MODULE__{files: files, cache: cache}) do
+    Files.close(files)
     Cache.delete(cache)
   end
 
@@ -217,7 +219,7 @@ defmodule GitServer.ObjectDB do
     Enum.find_value(packs, :error, fn {idx, reader} ->
       case Idx.offset(idx, id) do
         {:ok, offset} ->
-          with {:error, reason} <- run(fn -> fun.(reader, offset) end) do
+          with {:error, reason} <- run(fn -> fun.(with_fd(db, reader), offset) end) do
             if :atomics.compare_exchange(db.logged, 1, 0, 1) == :ok,
               do: log(db.log_label, elem(db.names, reader.key), reason)
 
@@ -228,6 +230,15 @@ defmodule GitServer.ObjectDB do
           nil
       end
     end)
+  end
+
+  # A read stays inside one pack (a REF_DELTA base is looked up only in its own idx),
+  # so the file it gets here stays open until it returns.
+  defp with_fd(db, reader) do
+    case open_file(db.files, reader.key, elem(db.names, reader.key)) do
+      {:ok, fd} -> %{reader | fd: fd}
+      {:error, reason} -> Reader.fail(reason)
+    end
   end
 
   # The reason is one of this module's own messages, which never quote content.

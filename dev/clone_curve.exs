@@ -26,7 +26,8 @@
 # git and the server's own work; pack KB received by git; mean ms and S3 GETs of the
 # timed pushes.
 #
-# Set ulimit -n to see what the server's open files do: it holds one per listed pack.
+# Set ulimit -n to check the server's open files: a request holds only a few packs open
+# at once (ObjectDB's :max_open_files), whatever the pack count.
 defmodule CloneCurve do
   defmodule CountingStore do
     @moduledoc "Delegates to another store, counting GETs, their bytes and their time."
