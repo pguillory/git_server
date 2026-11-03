@@ -289,6 +289,19 @@ defmodule GitServer.ObjectDBTest do
              Writer.write(db, [missing], [], fn piece, acc -> {:ok, [acc | piece]} end)
   end
 
+  test "the writer stops when emit does", %{fixture: f, objects: objects} do
+    {:ok, db} = open([f.packs.ofs])
+    ids = for {hex, _, _} <- objects, do: elem(ObjectId.from_hex(hex), 1)
+
+    # The header, then the first object, then stop.
+    emit = fn
+      _piece, n when n < 2 -> {:ok, n + 1}
+      _piece, n -> {:error, :stopped, n}
+    end
+
+    assert Writer.write(db, ids, 0, emit) == {:error, :stopped, 2}
+  end
+
   defp rev_parse(f, rev) do
     String.trim(git(f, ["rev-parse", rev]))
   end

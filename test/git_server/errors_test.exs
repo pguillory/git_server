@@ -136,7 +136,7 @@ defmodule GitServer.ErrorsTest do
   # Git can't be made to send this slowly, so a raw client: the server stops waiting
   # for the rest of an oversized body at the push deadline and still reports. The
   # body passes the cap in the server's second 64 KB read, and then stalls.
-  test "a client too slow to drain still gets its report", %{tmp_dir: _tmp_dir} do
+  test "a client too slow to drain still gets its report" do
     server =
       TestServer.start!(max_pack_bytes: 100_000, max_command_bytes: 200, push_deadline_ms: 300)
 

@@ -1,7 +1,7 @@
 defmodule GitServer.Store.S3Test do
   use ExUnit.Case, async: true
   alias GitServer.Store
-  import GitServer.Store.S3, only: [check_endpoint: 1, check_prefix: 1]
+  import GitServer.Store.S3, only: [check_endpoint: 1, check_prefix: 1, new: 1]
 
   test "endpoint and prefix checks" do
     assert check_endpoint("https://example.com") == :ok
@@ -29,17 +29,17 @@ defmodule GitServer.Store.S3Test do
       secret_access_key: "very-secret",
     ]
 
-    assert {:ok, {GitServer.Store.S3, config}} = GitServer.Store.S3.new(settings)
+    assert {:ok, {GitServer.Store.S3, config}} = new(settings)
     assert config.prefix == ""
     refute inspect(config) =~ "very-secret"
 
     assert {:error, "missing S3 settings: bucket"} =
-             GitServer.Store.S3.new(Keyword.delete(settings, :bucket))
+             new(Keyword.delete(settings, :bucket))
 
     assert {:error, _} =
-             GitServer.Store.S3.new(Keyword.put(settings, :endpoint, "http://example.com"))
+             new(Keyword.put(settings, :endpoint, "http://example.com"))
 
-    assert {:error, _} = GitServer.Store.S3.new(Keyword.put(settings, :prefix, "p"))
+    assert {:error, _} = new(Keyword.put(settings, :prefix, "p"))
   end
 
   test "get, put, list and delete" do

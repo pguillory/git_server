@@ -439,6 +439,7 @@ git isolated from your configuration so they can't reach a credential store or p
 ```sh
 bin/test-s3-local start   # MinIO on 127.0.0.1, settings in tmp/test-s3.env
 mix test
+mix test --include slow   # also the long race tests
 bin/test-s3-local stop
 ```
 

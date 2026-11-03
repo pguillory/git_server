@@ -95,7 +95,9 @@ defmodule GitServer.StorageFailureTest do
 
     {_, 0} = push(server, local)
     no_deltas = TestServer.start!(store: server.store, max_delta_depth: 0)
-    small = TestServer.start!(store: server.store, max_object_bytes: 1000)
+    requests = Path.join(tmp_dir, "requests")
+    File.mkdir_p!(requests)
+    small = TestServer.start!(store: server.store, max_object_bytes: 1000, temp_dir: requests)
 
     log =
       capture_log(fn ->
@@ -112,6 +114,8 @@ defmodule GitServer.StorageFailureTest do
       end)
 
     assert log =~ ~r/repository repo: pack [0-9a-f]{40}\.pack: object too large/
+    # The failed fetch's request files are gone.
+    assert File.ls!(requests) == []
   end
 
   test "a pack index that doesn't match its pack fails a fetch and a push, logged",

@@ -48,7 +48,9 @@ Tests:
   library's own API couldn't produce, except as listed under exceptions below. A
   wrapper that only counts or paces calls (`CountingStore`, the repository test's
   `GateStore`) is fine.
-- No test waits out a timeout or kills a process. Tests that run for minutes are
+- No test waits out a timeout or kills a process. The one wait is errors_test's
+  client too slow to drain, which needs the 300 ms push deadline to pass, since git
+  can't be made to send that slowly. Tests that run for minutes are
   tagged `:slow` and excluded by default; `mix test --include slow` runs them, and
   is worth running after a change to pushing, fetching or compaction.
 
