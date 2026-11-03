@@ -77,4 +77,45 @@ defmodule GitServer.RepositoryTest do
 
     assert File.ls!(tmp_dir) == []
   end
+
+  @tag :tmp_dir
+  test "update writes against the fresh state after a lost race, stops, or gives up at the deadline",
+       %{tmp_dir: tmp_dir} do
+    inner = GitServer.TestStore.fresh()
+    {:ok, e1} = Repository.put_state(inner, "r", %State{refs: %{"refs/heads/a" => @a}}, :absent)
+
+    # Another writer wins the race just before the first conditional write.
+    store =
+      GitServer.RacingStore.wrap(inner, fn ->
+        {:ok, _} =
+          Repository.put_state(inner, "r", %State{refs: %{"refs/heads/b" => @b}}, e1)
+      end)
+
+    deadline = System.monotonic_time(:millisecond) + 10_000
+
+    add_c = fn snapshot, last ->
+      refs = Map.put(snapshot.state.refs, "refs/heads/c", @a)
+      {:write, %{snapshot.state | refs: refs}, [map_size(snapshot.state.refs) | last || []]}
+    end
+
+    {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir)
+    # The second call saw the first's result and the other writer's ref.
+    assert Repository.update(snapshot, deadline, add_c) == {:ok, [1, 1]}
+
+    assert {:ok, %State{refs: %{"refs/heads/b" => @b, "refs/heads/c" => @a} = refs}, _} =
+             Repository.read_state(inner, "r")
+
+    assert map_size(refs) == 2
+    Repository.release(snapshot)
+
+    {:ok, snapshot} = Repository.snapshot(inner, "r", tmp_dir)
+    assert Repository.update(snapshot, deadline, fn _, nil -> {:stop, :no} end) == {:stop, :no}
+
+    # A stale snapshot past its deadline loses once and gives up.
+    {:ok, _} = Repository.put_state(inner, "r", State.new(), snapshot.etag)
+    past = System.monotonic_time(:millisecond)
+    write = fn snapshot, _last -> {:write, snapshot.state, :tried} end
+    assert Repository.update(snapshot, past, write) == {:error, :deadline, :tried}
+    Repository.release(snapshot)
+  end
 end

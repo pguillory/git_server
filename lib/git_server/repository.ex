@@ -9,8 +9,10 @@ defmodule GitServer.Repository do
   `read_state/2` reads the state alone. `snapshot/3` also downloads every listed
   pack and idx into a fresh local directory, for reading objects; `release/1`
   deletes it, and `with_snapshot/4` does both around a function. `put_state/4` is
-  the conditional state write that publishes a push. All of it uses only the
-  store's generic calls.
+  the conditional state write, and `update/3` the loop every writer of a state goes
+  through: compute the new state from a snapshot, write it conditionally, and on a
+  lost race refresh and compute again. All of it uses only the store's generic
+  calls.
   """
 
   alias GitServer.{RepoName, State, Store}
@@ -105,6 +107,52 @@ defmodule GitServer.Repository do
   def refresh(%Snapshot{} = snapshot) do
     with {:ok, state, etag} <- read_state(snapshot.store, snapshot.repo) do
       download(snapshot, state, etag)
+    end
+  end
+
+  @doc """
+  Changes a repository's state with the conditional write, retried while other
+  writers win, until `deadline` (in `System.monotonic_time(:millisecond)`).
+
+  `fun.(snapshot, last)` computes the change against `snapshot`, where `last` is
+  `nil` on the first call and, after a lost race, the result its previous call
+  returned. It returns `{:write, new_state, result}` to write `new_state`
+  conditionally on exactly `snapshot`'s state, or `{:stop, result}` to write
+  nothing. After a lost race the loop waits a jittered, growing backoff, refreshes
+  the snapshot (`refresh/1`) and calls `fun` again.
+
+  Returns `{:ok, result}` once a write succeeded, `{:stop, result}`, or
+  `{:error, reason, result}` with `result` from the last call of `fun`: `reason` is
+  `:deadline` when a race was lost at or past the deadline, or the store's reason
+  when a write or refresh failed.
+  """
+  def update(%Snapshot{} = snapshot, deadline, fun), do: update(snapshot, deadline, fun, nil, 0)
+
+  defp update(snapshot, deadline, fun, last, n) do
+    case fun.(snapshot, last) do
+      {:write, %State{} = state, result} ->
+        case put_state(snapshot.store, snapshot.repo, state, snapshot.etag) do
+          {:ok, _etag} ->
+            {:ok, result}
+
+          {:error, :precondition_failed} ->
+            if System.monotonic_time(:millisecond) >= deadline do
+              {:error, :deadline, result}
+            else
+              Process.sleep(:rand.uniform(min(1000, 25 * 2 ** min(n, 6))))
+
+              case refresh(snapshot) do
+                {:ok, snapshot} -> update(snapshot, deadline, fun, result, n + 1)
+                {:error, reason} -> {:error, reason, result}
+              end
+            end
+
+          {:error, reason} ->
+            {:error, reason, result}
+        end
+
+      {:stop, result} ->
+        {:stop, result}
     end
   end
 

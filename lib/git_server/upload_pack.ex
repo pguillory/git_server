@@ -15,7 +15,7 @@ defmodule GitServer.UploadPack do
   """
 
   import Plug.Conn, only: [chunk: 2]
-  alias GitServer.{ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
+  alias GitServer.{HTTP, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
   alias GitServer.Pack.Writer
 
   @service "git-upload-pack"
@@ -89,7 +89,7 @@ defmodule GitServer.UploadPack do
         error(conn, "unsupported ls-refs argument #{inspect(argument)}")
 
       {:error, reason} ->
-        GitServer.Plug.store_error(conn, reason)
+        HTTP.store_error(conn, reason)
     end
   end
 
@@ -139,7 +139,7 @@ defmodule GitServer.UploadPack do
         PktLine.encode("#{id} #{name}#{peeled_attribute(name, id, peel)}\n")
       end
 
-    GitServer.Plug.result(conn, @service, [head, refs, PktLine.flush()])
+    HTTP.result(conn, @service, [head, refs, PktLine.flush()])
   end
 
   defp listed_refs(state, options) do
@@ -244,7 +244,7 @@ defmodule GitServer.UploadPack do
     case check_wants(db, state, request.wants) do
       :ok when request.done -> send_pack(conn, db, request.wants, common, [])
       :ok when common != [] -> send_pack(conn, db, request.wants, common, acknowledgments(common))
-      :ok -> GitServer.Plug.result(conn, @service, nak())
+      :ok -> HTTP.result(conn, @service, nak())
       {:error, reason} -> error(conn, reason)
     end
   end
@@ -312,7 +312,7 @@ defmodule GitServer.UploadPack do
   end
 
   defp stream_pack(conn, db, ids, preamble) do
-    conn = GitServer.Plug.chunked_result(conn, @service)
+    conn = HTTP.chunked_result(conn, @service)
     conn = send_chunk(conn, [preamble, PktLine.encode("packfile\n")])
     emit = fn piece, conn -> send_chunk(conn, PktLine.sideband(1, piece)) end
 
@@ -347,12 +347,12 @@ defmodule GitServer.UploadPack do
       end)
 
     case result do
-      {:error, reason} -> GitServer.Plug.store_error(conn, reason)
+      {:error, reason} -> HTTP.store_error(conn, reason)
       sent -> sent
     end
   end
 
   defp error(conn, reason) do
-    GitServer.Plug.result(conn, @service, PktLine.error(reason))
+    HTTP.result(conn, @service, PktLine.error(reason))
   end
 end
