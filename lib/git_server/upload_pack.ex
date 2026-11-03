@@ -10,8 +10,11 @@ defmodule GitServer.UploadPack do
   makes the server `ready`, which may send more than git's own upload-pack would but
   is always correct.
 
-  An error before the response starts is an `ERR` packet. An error while the pack is
-  going out is a fatal message on side-band 3.
+  An error before the response starts is an `ERR` packet, which git prints as
+  `fatal: remote error: <text>`: a POST's HTTP error status reaches the user only as
+  `RPC failed`. A store failure is logged and the client told only that the server's
+  storage failed. An error while the pack is going out is a fatal message on
+  side-band 3.
   """
 
   import Plug.Conn, only: [chunk: 2]
@@ -89,7 +92,7 @@ defmodule GitServer.UploadPack do
         error(conn, "unsupported ls-refs argument #{inspect(argument)}")
 
       {:error, reason} ->
-        HTTP.store_error(conn, reason)
+        storage_error(conn, reason)
     end
   end
 
@@ -351,9 +354,32 @@ defmodule GitServer.UploadPack do
       end)
 
     case result do
-      {:error, reason} -> HTTP.store_error(conn, reason)
+      {:error, reason} -> storage_error(conn, reason)
       sent -> sent
     end
+  end
+
+  @doc """
+  Answers a request whose body couldn't be read (see `GitServer.Body`) with an `ERR`
+  packet, since git shows a POST's HTTP error body to no one.
+  """
+  # The rest of the body goes unread, so the connection is closed after the reply.
+  def body_error(conn, :too_large, config) do
+    conn = Plug.Conn.put_resp_header(conn, "connection", "close")
+    error(conn, "request too large (limit #{Config.format_bytes(config.max_request_bytes)})")
+  end
+
+  def body_error(conn, :bad_gzip, _config), do: error(conn, "malformed gzip request body")
+
+  def body_error(conn, :unsupported_encoding, _config),
+    do: error(conn, "unsupported Content-Encoding")
+
+  def body_error(conn, _reason, _config), do: error(conn, "could not read the request body")
+
+  # The reason is logged; the client hears only that storage failed.
+  defp storage_error(conn, reason) do
+    HTTP.log_store_error(reason)
+    error(conn, HTTP.storage_failed())
   end
 
   defp error(conn, reason) do

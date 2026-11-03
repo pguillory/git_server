@@ -215,7 +215,7 @@ defmodule GitServer.UploadPackTest do
       log =
         capture_log(fn ->
           {output, 128} = git(["clone", "-q", url, Path.join(tmp_dir, "clone")])
-          assert output =~ "500"
+          assert output =~ "fatal: remote error: the server's storage failed; try again later"
         end)
 
       assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
@@ -224,7 +224,7 @@ defmodule GitServer.UploadPackTest do
         capture_log(fn ->
           Seed.commit!(source, "file", "three\n")
           {output, 1} = git(["push", url, "main"], cd: source.repo)
-          assert output =~ "storage error"
+          assert output =~ "storage failed, try again later"
         end)
 
       assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
@@ -294,7 +294,7 @@ defmodule GitServer.UploadPackTest do
           {output, 128} =
             git(["clone", "-q", TestServer.url(server, "repo"), Path.join(tmp_dir, "clone")])
 
-          assert output =~ "too much work resolving delta bases"
+          assert output =~ "remote: git_server: too much work resolving delta bases\n"
         end)
 
       assert log =~ "repository repo: pack #{name}.pack: too much work resolving delta bases"

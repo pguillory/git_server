@@ -28,13 +28,15 @@ defmodule GitServer.Config do
     "Checking a push" in `GitServer.ReceivePack`, and `GitServer.Push`.
   - `:before_update_timeout_ms`: how long one call of `:before_update` may run
     before the push is refused (default 30 seconds).
+  - `:after_update`: a function of one map, called once after a push has landed,
+    for webhooks, CI triggers and notifications (default none). See
+    `GitServer.ReceivePack`.
+  - `:after_update_timeout_ms`: how long one call of `:after_update` may run before
+    it is killed (default 30 seconds).
   """
 
   @enforce_keys [:store, :authorize, :temp_dir]
-  defstruct [
-    :store,
-    :authorize,
-    :temp_dir,
+  @defaults [
     max_pack_bytes: 100_000_000,
     max_objects: 100_000,
     max_object_bytes: 50_000_000,
@@ -45,35 +47,106 @@ defmodule GitServer.Config do
     push_deadline_ms: 15_000,
     before_update: nil,
     before_update_timeout_ms: 30_000,
+    after_update: nil,
+    after_update_timeout_ms: 30_000,
   ]
+  defstruct @enforce_keys ++ @defaults
+  @fields @enforce_keys ++ Keyword.keys(@defaults)
 
   @doc """
   Builds the config from the Plug's options: either the options themselves, or
   `config: {module, function, args}` or `config: fun` (no arguments) returning
-  them as a keyword list or map. Raises on a missing or unknown option, which is a
-  bug in the host.
+  them as a keyword list or map. Returns `{:ok, config}`, or `{:error, description}`
+  for the log when the function fails or the options are wrong, which is a bug in
+  the host. The description never holds an option's value or anything a failure
+  carries (see `GitServer.Failure`), since the options hold the store's secrets.
   """
   def resolve(opts) do
-    opts =
-      case Keyword.fetch(opts, :config) do
-        {:ok, {module, function, args}} -> apply(module, function, args)
-        {:ok, fun} when is_function(fun, 0) -> fun.()
-        :error -> opts
-      end
-
-    opts = Map.new(opts)
-
-    unless match?({_module, _config}, opts[:store]) and is_function(opts[:authorize], 1) do
-      raise ArgumentError,
-            "GitServer.Plug needs a :store and an :authorize function of one argument"
+    with {:ok, opts} <- call(Keyword.fetch(opts, :config), opts) do
+      validate(Map.new(opts))
     end
-
-    unless opts[:before_update] == nil or is_function(opts[:before_update], 1) do
-      raise ArgumentError, "GitServer.Plug's :before_update must be a function of one argument"
-    end
-
-    struct!(__MODULE__, Map.put_new_lazy(opts, :temp_dir, &System.tmp_dir!/0))
   end
+
+  defp call(:error, opts), do: {:ok, opts}
+
+  defp call({:ok, {module, function, args}}, _opts) when is_atom(module) and is_list(args),
+    do: call_config(fn -> apply(module, function, args) end)
+
+  defp call({:ok, fun}, _opts) when is_function(fun, 0), do: call_config(fun)
+
+  defp call({:ok, _config}, _opts),
+    do: {:error, "the :config option must be {module, function, args} or a function of none"}
+
+  defp call_config(fun) do
+    result = fun.()
+
+    # A struct isn't enumerable, and an error inspecting it would print its values.
+    if (is_map(result) and not is_struct(result)) or
+         (is_list(result) and Keyword.keyword?(result)),
+       do: {:ok, result},
+       else: {:error, "the config function returned something other than a keyword list or map"}
+  catch
+    kind, reason ->
+      {:error, "the config function " <> GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
+  end
+
+  @counts [
+    :max_pack_bytes,
+    :max_objects,
+    :max_object_bytes,
+    :max_delta_depth,
+    :max_fetch_work_bytes,
+    :max_request_bytes,
+    :max_command_bytes,
+  ]
+  @durations [:push_deadline_ms, :before_update_timeout_ms, :after_update_timeout_ms]
+
+  defp validate(opts) do
+    unknown = opts |> Map.keys() |> Enum.reject(&(&1 in @fields))
+    opts = Map.merge(Map.new([temp_dir: nil] ++ @defaults), opts)
+    not_count = Enum.reject(@counts, &(is_integer(opts[&1]) and opts[&1] >= 0))
+    not_duration = Enum.reject(@durations, &(is_integer(opts[&1]) and opts[&1] >= 0))
+
+    cond do
+      unknown != [] ->
+        {:error, "unknown GitServer.Plug options: #{names(unknown)}"}
+
+      not match?(
+        {module, _config} when is_atom(module) and not is_boolean(module) and module != nil,
+        opts[:store]
+      ) or
+          not is_function(opts[:authorize], 1) ->
+        {:error, "GitServer.Plug needs a :store and an :authorize function of one argument"}
+
+      not (opts[:before_update] == nil or is_function(opts[:before_update], 1)) ->
+        {:error, "GitServer.Plug's :before_update must be a function of one argument"}
+
+      not (opts[:after_update] == nil or is_function(opts[:after_update], 1)) ->
+        {:error, "GitServer.Plug's :after_update must be a function of one argument"}
+
+      not_count != [] ->
+        {:error, "GitServer.Plug options must be non-negative integers: #{names(not_count)}"}
+
+      not_duration != [] ->
+        {:error,
+         "GitServer.Plug options must be integers of milliseconds: #{names(not_duration)}"}
+
+      not (opts[:temp_dir] == nil or is_binary(opts[:temp_dir])) ->
+        {:error, "GitServer.Plug's :temp_dir must be a path"}
+
+      true ->
+        {:ok, struct!(__MODULE__, %{opts | temp_dir: opts[:temp_dir] || System.tmp_dir!()})}
+    end
+  end
+
+  defp names(keys), do: Enum.map_join(keys, ", ", &inspect/1)
+
+  @doc """
+  A byte count for a message naming a limit: `"100 MB"`, `"2 KB"`, or `"1500 bytes"`.
+  """
+  def format_bytes(n) when rem(n, 1_000_000) == 0 and n > 0, do: "#{div(n, 1_000_000)} MB"
+  def format_bytes(n) when rem(n, 1000) == 0 and n > 0, do: "#{div(n, 1000)} KB"
+  def format_bytes(n), do: "#{n} bytes"
 
   @doc """
   The limits for indexing a pushed pack (`GitServer.Pack.Indexer`). The pack size and

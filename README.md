@@ -118,12 +118,19 @@ bodies unread.
 - `:before_update`: a function that checks a push before it changes anything. See below.
 - `:before_update_timeout_ms`: how long one call of `:before_update` may run before the
   push is refused. Default 30 seconds.
+- `:after_update`: a function called after a push lands. See below.
+- `:after_update_timeout_ms`: how long one call of `:after_update` may run before it is
+  killed. Default 30 seconds.
 
 The pack size and object count limit what a push may send; a pack already stored is
 read whatever its size and count.
 
 Give them directly as the Plug's options, or as `config:` naming a function (`{module,
-function, args}` or a zero-arity function) that returns them on each request.
+function, args}` or a zero-arity function) that returns them on each request. If that
+function raises, throws, exits or returns something other than a keyword list or map,
+or the options are wrong, the request gets a 500 and the log says which, without any
+option's value or the failure's message: for a failure, its kind, an exception's module
+and a stacktrace without arguments.
 
 `GitServer.Store.S3` requires `https` for any endpoint not on this machine.
 
@@ -139,10 +146,21 @@ It's called before any store access with a map:
 - `conn`: the `Plug.Conn`.
 
 It returns `:ok`, `:unauthorized` (401 with a Basic challenge) or `:forbidden` (403). The
-library holds no secret and never logs credentials. If `authorize` raises, throws, exits
-or returns anything else, the request gets a 500 and the server log says only which:
-for a raise, throw or exit, its kind, an exception's module and a stacktrace without
-arguments; for a return, not the value.
+library holds no secret, and its own log lines never hold credentials. If `authorize`
+raises, throws, exits or returns anything else, the request gets a 500 and the server
+log says only which: for a raise, throw or exit, its kind, an exception's module and a
+stacktrace without arguments; for a return, not the value.
+
+Rate limiting failed logins is up to `authorize`, which sees the conn (its remote
+address, for one).
+
+One thing the library can't control: if a request crashes anywhere else in the Plug
+(a bug), or its body times out or is malformed, the HTTP server logs it, and Bandit
+attaches the request's original conn, Authorization header included, as `conn` logger
+metadata. Logger's default formatter doesn't print it, but a formatter configured to
+print all metadata, or an error tracker that captures it, would record the password.
+Leave `conn` out of the metadata your log formatter prints, and have your error tracker
+drop or scrub the Authorization header.
 
 There is no create step. A repository with nothing in the bucket is an empty one, so
 `authorize` decides which names may exist. A name is one or more `/`-separated segments
@@ -206,6 +224,64 @@ and the write only succeeds on exactly the state the latest call saw. So a push 
 on a repository its check didn't see, and an approval doesn't mean the push landed. A push
 refused after a lost race may leave its pack stored but unlisted, which is harmless.
 
+### After a push
+
+`:after_update` is called once for each push that landed, after git has its report, for
+webhooks, CI triggers and notifications. It gets a map:
+
+- `repo`: the repository name.
+- `conn`: the `Plug.Conn`, to read (its response has been sent).
+- `updates`: what landed, in the client's order, as `before_update` sees them:
+  `[%{ref: name, old: id | nil, new: id | nil}]`. Without `--atomic`, a push can land some
+  refs and not others; only those that landed are listed.
+
+It's never called for a push that changed nothing (refused, declined, stale, or failed).
+It runs in a process of its own and its result is ignored. If it raises, throws, exits or
+runs past `:after_update_timeout_ms`, the server logs which, as for `before_update`, and
+the push, already landed, is unaffected. The request's connection waits for it, so hand
+slow work to a job queue.
+
+## When something goes wrong
+
+What `git` prints for each failure (the tests check these lines, against real git for
+all but the last row). Git shows a server's message itself only on its first
+request; after that, an HTTP error comes out as `error: RPC failed; HTTP 500` and
+nothing more, so failures after it are answered inside the protocol. The exceptions,
+still plain HTTP errors, are requests git itself doesn't send (malformed or truncated
+ones), and a `config` or `authorize` that fails or refuses only on a later request.
+
+| What happened | What `git` prints |
+| --- | --- |
+| Wrong password | `remote: Authentication failed: wrong or missing username or password`, then `fatal: Authentication failed for '<url>'` |
+| No credentials, and git can't prompt | `fatal: could not read Username for '<url>': terminal prompts disabled` (git's own) |
+| `authorize` says `:forbidden` | `remote: Access denied: you can't read this repository, or it doesn't exist` (or `push to`), then `The requested URL returned error: 403`. It never says whether the repository exists. |
+| A name that can't be a repository | `remote: Not found`, then `fatal: repository '<url>' not found` |
+| Fetching with protocol v0 or v1 | `remote: git_server needs Git protocol version 2 to fetch (git 2.26 or later, protocol.version=2)` |
+| The host's `config` or `authorize` fails | `remote: Server error`, then `The requested URL returned error: 500`; the server log says what failed |
+| Storage fails on a push's first request | `remote: the server's storage failed; try again later`, then `The requested URL returned error: 500` |
+| Storage fails listing refs or fetching | `fatal: remote error: the server's storage failed; try again later` |
+| Storage fails during a push | `! [remote rejected] main -> main (storage failed, try again later)` |
+| A push over `:max_pack_bytes` | `error: remote unpack failed: pack too large (limit 100 MB)` and `! [remote rejected] main -> main (unpacker error)` |
+| An object over `:max_object_bytes` | `error: remote unpack failed: object too large (limit 50 MB)` |
+| A push over `:max_objects` | `error: remote unpack failed: too many objects in pack (limit 100000)` |
+| A push that keeps losing the race until `:push_deadline_ms` | `! [remote rejected] main -> main (failed to update ref, too many pushes at once)` |
+| `before_update` refuses | its message as `remote:` lines, then `! [remote rejected] main -> main (declined)` |
+| `before_update` fails or times out | `remote: The server could not check this push.`, then `(push check failed)` |
+| A fetch of an object no ref reaches | `fatal: remote error: upload-pack: not our ref <id>` |
+| A fetch over `:max_fetch_work_bytes` | `remote: git_server: too much work resolving delta bases`, then `fatal: early EOF` |
+| A push whose ref commands are over `:max_command_bytes` (thousands of refs at once) | `error: remote unpack failed: too many ref commands (limit 1 MB)`, each ref then `(remote failed to report status)` |
+| A pushed delta chain over `:max_delta_depth` | `error: remote unpack failed: delta chain too deep (limit 100)` |
+| An upload-pack request over `:max_request_bytes` | `fatal: remote error: request too large (limit 10 MB)` |
+
+The server log keeps the reason for every storage failure; the client never sees store
+details. Limits show their configured values.
+
+A push over `:max_pack_bytes` is read to the end and dropped, so git gets its report
+rather than a broken pipe, as long as the push is within four times the limit and
+arrives within `:push_deadline_ms`. Past either, the server replies and closes the
+connection, and git may print `RPC failed` or `Everything up-to-date` beside the
+report. Nothing lands either way.
+
 ## Storage
 
 Everything for a repository is under `<prefix><repo>.git/`:
@@ -233,7 +309,8 @@ The store must support conditional PUT (`If-Match` and `If-None-Match: *`).
    unlisted pack, which is harmless garbage. Nothing deletes garbage yet.
 3. `state` is only ever replaced conditionally on the version the push checked against.
    A push that loses the race re-reads `state`, checks its commands again and retries,
-   until the deadline, when it is rejected with `failed to update ref`. Pushes to
+   until the deadline, when it is rejected with `failed to update ref, too many pushes
+   at once`. Pushes to
    different branches all land. Of two pushes to one branch from one base, one lands and
    the other is rejected with `fetch first`, so no update is ever lost.
 4. A fetch reads one `state`, and every pack it lists was fully written first, so a clone

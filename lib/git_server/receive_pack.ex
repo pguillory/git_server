@@ -7,7 +7,9 @@ defmodule GitServer.ReceivePack do
   the client's capabilities, then a flush, then the pack whenever a command isn't a
   delete. It is handled in this order:
 
-  1. The commands are read under the command cap. A body of only a flush is git's
+  1. The commands are read under the command cap. Past it, the rest of the body is
+     drained as for a pack too large, and the report's unpack status says so (or,
+     with not even a first command line read, HTTP 413). A body of only a flush is git's
      probe before a large push and gets an empty reply.
   2. The pack is streamed to a temporary file and indexed: every delta is resolved
      with its base in the pack itself (no thin packs), every object hashed and
@@ -31,6 +33,14 @@ defmodule GitServer.ReceivePack do
   Without `atomic`, commands that pass are applied and the others rejected. With it,
   one rejection rejects them all. Nothing is ever deleted here: a stored pack that no
   state lists is harmless garbage.
+
+  A pack over `max_pack_bytes` is refused with `pack too large (limit ...)`, after
+  the rest of the body is read and dropped, as long as the whole body stays within
+  four times the limit and arrives within `push_deadline_ms`, since git still
+  sending would show an early reply as a broken pipe. Past those the reply goes
+  anyway and the connection is closed. The other limits are
+  named the same way. A store failure is logged, and the client told only
+  `storage failed, try again later`.
 
   If a push leaves HEAD's target missing and creates branches, HEAD moves to
   `refs/heads/main` if it exists, else `refs/heads/master`, else the first branch
@@ -65,9 +75,18 @@ defmodule GitServer.ReceivePack do
   a lost race may leave the pack stored but unlisted, harmless as any unlisted pack.
   A retry starts only before `push_deadline_ms`, so a slow function makes a push run
   that much longer.
+
+  ## After a push
+
+  The `:after_update` option is a function of one map, `%{repo:, conn:, updates:}`,
+  called once after a push landed and its report was sent, with the updates that
+  landed (those reported `ok`), in `before_update`'s form. It is never called for a
+  push that changed nothing. It runs in a process of its own, killed past
+  `:after_update_timeout_ms`; its result is ignored, and a failure is logged the way
+  `before_update`'s is.
   """
 
-  alias GitServer.{HTTP, Body, PktLine, RefName, Repository}
+  alias GitServer.{Body, Config, HTTP, PktLine, RefName, Repository}
   alias GitServer.ReceivePack.Update
 
   @service "git-receive-pack"
@@ -120,8 +139,9 @@ defmodule GitServer.ReceivePack do
       {:ok, line, rest} when is_binary(line) ->
         used = used + byte_size(buffer) - byte_size(rest)
 
+        # The line is kept even past the cap: the first one names the capabilities.
         if used > config.max_command_bytes,
-          do: too_large(reader),
+          do: too_large(reader, config, [line | lines]),
           else: read_commands(reader, config, repo, rest, used, [line | lines])
 
       {:ok, _special, _rest} ->
@@ -131,7 +151,7 @@ defmodule GitServer.ReceivePack do
         malformed(reader, reason)
 
       :incomplete when used + byte_size(buffer) > config.max_command_bytes ->
-        too_large(reader)
+        too_large(reader, config, lines)
 
       :incomplete ->
         case Body.next(reader) do
@@ -147,9 +167,43 @@ defmodule GitServer.ReceivePack do
     end
   end
 
-  defp too_large(reader) do
+  # Over the command cap. The first command line, read already, carries the
+  # capabilities, so the client gets a report: the unpack status alone, which git
+  # shows as `remote unpack failed`, each ref then failing for want of a status.
+  defp too_large(reader, _config, []) do
     conn = Body.close(reader)
     HTTP.body_error(conn, :too_large)
+  end
+
+  defp too_large(reader, config, lines) do
+    {_command, capabilities} = split_capabilities(List.last(lines))
+    conn = Body.close(reader)
+    limit = Config.format_bytes(config.max_command_bytes)
+    # The body may still hold a pack of up to the limit, and as much again.
+    drain(
+      conn,
+      config,
+      options(capabilities),
+      [],
+      nil,
+      4 * config.max_pack_bytes,
+      "too many ref commands (limit #{limit})"
+    )
+  end
+
+  defp split_capabilities(first) do
+    case :binary.split(first, <<0>>) do
+      [command, capabilities] -> {command, String.split(PktLine.chomp(capabilities), " ")}
+      [command] -> {command, []}
+    end
+  end
+
+  defp options(capabilities) do
+    %{
+      side_band: "side-band-64k" in capabilities,
+      report: "report-status" in capabilities,
+      atomic: "atomic" in capabilities,
+    }
   end
 
   defp malformed(reader, reason) do
@@ -162,25 +216,17 @@ defmodule GitServer.ReceivePack do
   end
 
   defp commands(reader, config, repo, [first | others], rest) do
-    {first, capabilities} =
-      case :binary.split(first, <<0>>) do
-        [command, capabilities] -> {command, String.split(PktLine.chomp(capabilities), " ")}
-        [command] -> {command, []}
-      end
+    {first, capabilities} = split_capabilities(first)
 
     with {:ok, commands} <- parse_commands([first | others]),
          :ok <- check_capabilities(capabilities) do
-      options = %{
-        side_band: "side-band-64k" in capabilities,
-        report: "report-status" in capabilities,
-        atomic: "atomic" in capabilities,
-      }
+      options = options(capabilities)
 
       commands = commands |> check_names() |> check_duplicates()
 
       if Enum.all?(commands, &Update.delete?/1) do
         conn = Body.close(reader)
-        reply(conn, options, Update.run(conn, config, repo, commands, options, nil))
+        run(conn, config, repo, commands, options, nil)
       else
         receive_pack(reader, config, repo, commands, options, rest)
       end
@@ -252,34 +298,102 @@ defmodule GitServer.ReceivePack do
     end)
   end
 
-  # Step 2: the pack, streamed to a file for the update to index.
+  # Step 2: the pack, streamed to a file for the update to index. A body declared
+  # bigger than the cap isn't read into a file at all.
   defp receive_pack(reader, config, repo, commands, options, rest) do
-    # The pack may hold a private repository's objects.
-    case Repository.private_dir(config.temp_dir) do
-      {:ok, dir} ->
-        try do
-          receive_pack(reader, config, repo, commands, options, rest, Path.join(dir, "push.pack"))
-        after
-          File.rm_rf(dir)
-        end
+    declared = Body.declared_length(reader)
 
-      {:error, reason} ->
-        conn = Body.close(reader)
-        reply(conn, options, {:ok, Update.storage_failed(commands, reason)})
+    if declared != nil and declared > config.max_command_bytes + config.max_pack_bytes do
+      conn = Body.close(reader)
+      too_large_pack(conn, config, commands, options, declared)
+    else
+      # The pack may hold a private repository's objects.
+      case Repository.private_dir(config.temp_dir) do
+        {:ok, dir} ->
+          try do
+            receive_pack(
+              reader,
+              config,
+              repo,
+              commands,
+              options,
+              rest,
+              Path.join(dir, "push.pack")
+            )
+          after
+            File.rm_rf(dir)
+          end
+
+        {:error, reason} ->
+          conn = Body.close(reader)
+          reply(conn, options, {:ok, Update.storage_failed(commands, reason)})
+      end
     end
   end
 
   defp receive_pack(reader, config, repo, commands, options, rest, path) do
     case Body.copy_to_file(reader, rest, path) do
       {:ok, conn} ->
-        reply(conn, options, Update.run(conn, config, repo, commands, options, path))
+        run(conn, config, repo, commands, options, path)
+
+      {:error, :too_large, conn} ->
+        too_large_pack(conn, config, commands, options, nil)
 
       {:error, reason, conn} ->
         reply(conn, options, Update.unpack_failed(commands, read_error(reason)))
     end
   end
 
-  defp read_error(:too_large), do: "pack too large"
+  # The push, its report, and then the host's `after_update` for what landed.
+  defp run(conn, config, repo, commands, options, path) do
+    result = Update.run(conn, config, repo, commands, options, path)
+
+    sent =
+      try do
+        reply(conn, options, result)
+      catch
+        # A landed push is announced even if its report couldn't be sent.
+        kind, reason ->
+          Update.after_update(config, repo, conn, result)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+
+    Update.after_update(config, repo, sent, result)
+    sent
+  end
+
+  # A pack over the limit, refused for its declared Content-Length before any of it
+  # was read (`declared`), or once the body passed its cap.
+  defp too_large_pack(conn, config, commands, options, declared) do
+    reason = "pack too large (limit #{Config.format_bytes(config.max_pack_bytes)})"
+    # Past its cap of the limit plus the command section, the body may be up to
+    # three times the limit more; a declared one, its declared length.
+    budget = declared || 3 * config.max_pack_bytes
+    drain(conn, config, options, commands, declared, budget, reason)
+  end
+
+  # Git is likely still sending, and shows a reply sent before it has finished as a
+  # broken pipe. So the rest of the body, up to `budget` bytes, is read and dropped
+  # first, as long as the whole body stays within four times the pack limit (plus
+  # the command section) and arrives within the push deadline. Past those the reply
+  # goes anyway and the connection is closed.
+  defp drain(conn, config, options, commands, declared, budget, reason) do
+    total = 4 * config.max_pack_bytes + config.max_command_bytes
+
+    drained =
+      if declared != nil and declared > total,
+        do: {:error, conn},
+        else: Body.drain(conn, budget, config.push_deadline_ms)
+
+    conn =
+      case drained do
+        {:ok, conn} -> conn
+        {:error, conn} -> Plug.Conn.put_resp_header(conn, "connection", "close")
+      end
+
+    reply(conn, options, Update.unpack_failed(commands, reason))
+  end
+
   defp read_error(:bad_gzip), do: "malformed gzip body"
   defp read_error(_reason), do: "cannot read the pack"
 

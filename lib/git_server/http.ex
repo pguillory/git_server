@@ -30,7 +30,11 @@ defmodule GitServer.HTTP do
     |> put_resp_header("cache-control", "no-cache")
   end
 
-  def body_error(conn, :too_large), do: text(conn, 413, "Request body too large")
+  # The rest of the body goes unread, so the connection is closed after the reply.
+  def body_error(conn, :too_large) do
+    conn |> put_resp_header("connection", "close") |> text(413, "Request body too large")
+  end
+
   def body_error(conn, :bad_gzip), do: text(conn, 400, "Malformed gzip request body")
 
   def body_error(conn, :unsupported_encoding),
@@ -40,9 +44,17 @@ defmodule GitServer.HTTP do
 
   # Store messages hold no secrets, but stay out of the response all the same.
   def store_error(conn, reason) do
-    Logger.error("git_server: store error: #{inspect(reason)}")
-    text(conn, 500, "Storage error")
+    log_store_error(reason)
+    text(conn, 500, storage_failed())
   end
+
+  @doc "Logs a store failure, whose reason the client never sees."
+  def log_store_error(reason) do
+    Logger.error("git_server: store error: #{inspect(reason)}")
+  end
+
+  @doc "What the client is told when the store fails."
+  def storage_failed, do: "the server's storage failed; try again later"
 
   # Git shows a text/plain error body to the user as `remote: ...` lines.
   def text(conn, status, message) do

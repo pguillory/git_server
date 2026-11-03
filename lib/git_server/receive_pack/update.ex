@@ -27,8 +27,68 @@ defmodule GitServer.ReceivePack.Update do
   def run(conn, config, repo, commands, options, pack_path) do
     case Indexer.index(pack_path, Config.push_limits(config)) do
       {:ok, pack} -> update(conn, config, repo, commands, options, {pack_path, pack})
-      {:error, reason} -> unpack_failed(commands, reason)
+      {:error, reason} -> unpack_failed(commands, name_limit(reason, config))
     end
+  end
+
+  # The indexer's reasons for a push over a limit, with the limit.
+  defp name_limit("pack too large", config),
+    do: "pack too large (limit #{Config.format_bytes(config.max_pack_bytes)})"
+
+  defp name_limit("object too large", config),
+    do: "object too large (limit #{Config.format_bytes(config.max_object_bytes)})"
+
+  defp name_limit("too many objects", config),
+    do: "too many objects in pack (limit #{config.max_objects})"
+
+  defp name_limit("delta chain too deep", config),
+    do: "delta chain too deep (limit #{config.max_delta_depth})"
+
+  defp name_limit(reason, _config), do: reason
+
+  @doc """
+  Calls the host's `after_update` function, if any, with the updates a push's result
+  says landed: those reported `ok`, which only a successful state write produces. It
+  runs in a process of its own, its result is ignored, and a failure or timeout is
+  logged without the failure's message or values, as for `before_update`.
+  """
+  def after_update(%{after_update: nil}, _repo, _conn, _result), do: :ok
+
+  def after_update(config, repo, conn, {unpack, commands}),
+    do: after_update(config, repo, conn, {unpack, commands, nil})
+
+  def after_update(config, repo, conn, {unpack, commands, _message}) do
+    landed = Enum.filter(commands, &(&1.error == nil))
+
+    if unpack == :ok and landed != [] do
+      push = %{
+        repo: repo,
+        conn: conn,
+        updates: Enum.map(landed, &%{ref: &1.ref, old: present(&1.old), new: present(&1.new)}),
+      }
+
+      call = fn ->
+        try do
+          config.after_update.(push)
+          :ok
+        catch
+          kind, reason -> {:failed, GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
+        end
+      end
+
+      case GitServer.Worker.run(call, config.after_update_timeout_ms) do
+        {:ok, :ok} -> :ok
+        {:ok, {:failed, what}} -> after_update_failed(what)
+        :exited -> after_update_failed("exited")
+        :timeout -> after_update_failed("timed out after #{config.after_update_timeout_ms} ms")
+      end
+    end
+
+    :ok
+  end
+
+  defp after_update_failed(what) do
+    Logger.error("git_server: the after_update function #{what}")
   end
 
   @doc "Sets a command's error, unless it already has one."
@@ -46,7 +106,7 @@ defmodule GitServer.ReceivePack.Update do
   @doc "Every command rejected for a storage failure, which is logged."
   def storage_failed(commands, reason) do
     Logger.error("git_server: store error during push: #{inspect(reason)}")
-    Enum.map(commands, &reject(&1, "storage error"))
+    Enum.map(commands, &reject(&1, "storage failed, try again later"))
   end
 
   # Steps 3 to 5, through `Repository.update/3`, so a lost race refreshes the
@@ -71,7 +131,8 @@ defmodule GitServer.ReceivePack.Update do
                 result
 
               {:error, :deadline, {checked, _name}} ->
-                {:ok, Enum.map(checked, &reject(&1, "failed to update ref"))}
+                {:ok,
+                 Enum.map(checked, &reject(&1, "failed to update ref, too many pushes at once"))}
 
               {:error, reason, {checked, _name}} ->
                 {:ok, storage_failed(checked, reason)}

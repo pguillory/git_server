@@ -32,10 +32,17 @@ defmodule GitServer.Plug do
 
   It returns `:ok`, `:unauthorized` (HTTP 401 with a Basic challenge, so git asks
   for credentials) or `:forbidden` (403). The Authorization header is dropped from
-  the conn once checked, and credentials are never logged. If the function raises,
-  throws, exits or returns anything else, the request is refused with HTTP 500 and
-  the log says only which: for a raise, throw or exit, its kind, an exception's
-  module and a stacktrace without arguments; for a return, not the value.
+  the conn once checked, and this library never logs credentials (see the README on
+  the HTTP server's own crash logs). If the function raises, throws, exits or
+  returns anything else, the request is refused with HTTP 500 and the log says only
+  which: for a raise, throw or exit, its kind, an exception's module and a
+  stacktrace without arguments; for a return, not the value. The same goes for a
+  `config:` function that fails and for wrong options, which the log names without
+  their values.
+
+  A 401 or 403 body is one line, which git shows as a `remote:` line; a 403 doesn't
+  say whether the repository exists. After `info/refs`, git shows no HTTP error body,
+  so the protocol modules answer the failures git can meet in-protocol.
   """
 
   @behaviour Plug
@@ -53,11 +60,12 @@ defmodule GitServer.Plug do
   def call(conn, opts) do
     with {:ok, segments, service} <- route(conn),
          {:ok, repo} <- repo_name(conn, segments) do
-      config = Config.resolve(opts)
       access = if service in [:upload_pack, :upload_pack_refs], do: :read, else: :write
 
-      case authorize(conn, config, repo, access) do
-        {:ok, conn} -> serve(conn, config, repo, service)
+      with {:ok, config} <- config(conn, opts),
+           {:ok, conn} <- authorize(conn, config, repo, access) do
+        serve(conn, config, repo, service)
+      else
         {:error, conn} -> conn
       end
     else
@@ -96,6 +104,18 @@ defmodule GitServer.Plug do
     with :error <- RepoName.parse(conn.request_path, segments), do: :not_found
   end
 
+  # The options hold the store's secrets, so a failure is logged without them.
+  defp config(conn, opts) do
+    case Config.resolve(opts) do
+      {:ok, config} ->
+        {:ok, config}
+
+      {:error, description} ->
+        Logger.error("git_server: #{description}")
+        {:error, HTTP.text(conn, 500, "Server error")}
+    end
+  end
+
   defp authorize(conn, config, repo, access) do
     request = %{repo: repo, access: access, credentials: credentials(conn), conn: conn}
     # delete_req_header/2 would drop only the first of several.
@@ -107,10 +127,20 @@ defmodule GitServer.Plug do
 
       :unauthorized ->
         conn = put_resp_header(conn, "www-authenticate", ~s(Basic realm="git"))
-        {:error, HTTP.text(conn, 401, "Authentication required")}
 
+        {:error,
+         HTTP.text(conn, 401, "Authentication failed: wrong or missing username or password")}
+
+      # Never says whether the repository exists.
       :forbidden ->
-        {:error, HTTP.text(conn, 403, "Forbidden")}
+        what = if access == :read, do: "read", else: "push to"
+
+        {:error,
+         HTTP.text(
+           conn,
+           403,
+           "Access denied: you can't #{what} this repository, or it doesn't exist"
+         )}
 
       {:failed, what} ->
         Logger.error("git_server: the authorize function #{what}")
@@ -174,8 +204,9 @@ defmodule GitServer.Plug do
           do: UploadPack.command(conn, config, repo, body),
           else: needs_v2(conn)
 
+      # After info/refs git shows only an in-protocol error.
       {:error, reason, conn} ->
-        HTTP.body_error(conn, reason)
+        UploadPack.body_error(conn, reason, config)
     end
   end
 
