@@ -298,6 +298,7 @@ defmodule GitServer.ForcePushTest do
   # force-pushes a rewrite of the tip. Either one push is refused and the other's
   # commit is the tip, or the ordinary push landed first and the forced one then
   # overwrote it. Never both refused, never a tip nobody pushed.
+  @tag :slow
   @tag timeout: 300_000
   test "a forced push racing an ordinary push", %{tmp_dir: tmp_dir} do
     server = TestServer.start!()

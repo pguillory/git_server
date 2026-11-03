@@ -123,6 +123,7 @@ defmodule GitServer.EndToEndTest do
   # The history is linear and clones run one after another, so a later clone can never
   # see an earlier commit. Each loop runs a minimum number of rounds even if a slow
   # bucket uses up the time.
+  @tag :slow
   @tag timeout: 300_000
   test "clones racing pushes are always whole and current", %{tmp_dir: tmp_dir} do
     server = TestServer.start!()

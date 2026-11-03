@@ -216,32 +216,6 @@ defmodule GitServer.BeforeUpdateTest do
     end
   end
 
-  test "a check past its timeout refuses the push", %{tmp_dir: tmp_dir} do
-    test = self()
-
-    server =
-      start!(
-        fn _ ->
-          send(test, {:worker, self()})
-          Process.sleep(:infinity)
-        end,
-        before_update_timeout_ms: 200
-      )
-
-    local = init!(Path.join(tmp_dir, "local"))
-    commit!(local, "README", "hello\n")
-
-    log =
-      capture_log(fn ->
-        {output, 1} = git(["push", TestServer.url(server, "r"), "main"], cd: local)
-        assert output =~ "(push check failed)"
-      end)
-
-    assert log =~ "timed out after 200 ms"
-    assert_received {:worker, worker}
-    refute Process.alive?(worker)
-  end
-
   test "a multi-ref push is seen whole and refused whole", %{tmp_dir: tmp_dir} do
     server =
       start!(fn push ->

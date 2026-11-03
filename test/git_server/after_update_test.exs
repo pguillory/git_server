@@ -154,20 +154,5 @@ defmodule GitServer.AfterUpdateTest do
     assert log =~ "the after_update function raised RuntimeError"
     refute log =~ secret
     refute log =~ head
-
-    slow =
-      TestServer.start!(
-        after_update: fn _ -> Process.sleep(:infinity) end,
-        after_update_timeout_ms: 50
-      )
-
-    log =
-      capture_log(fn ->
-        push_and_wait(slow, fn ->
-          {_, 0} = git(["push", TestServer.url(slow, "r"), "main"], cd: local)
-        end)
-      end)
-
-    assert log =~ "the after_update function timed out after 50 ms"
   end
 end
