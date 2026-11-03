@@ -37,7 +37,10 @@ supplies the store configuration and an `authorize` callback, and holds every se
 
 - `GitServer.Plug`: routing, request-time config (`GitServer.Config`), HTTP Basic
   credentials and the host's `authorize` callback, the upload-pack advertisement, and
-  dispatch of upload-pack (v2) and receive-pack (v0) requests.
+  dispatch of upload-pack (v2) and receive-pack (v0) requests. A failing `authorize`
+  is caught and refused with a 500.
+- `GitServer.Failure`: a host callback's failure described for the log with nothing
+  it carries (no message, value or arguments).
 - `GitServer.UploadPack`: the v2 commands, `ls-refs` and `fetch`: negotiation, the want
   check, and the pack streamed on side-band 1. `GitServer.ObjectWalk`: reachability
   over an object database.
