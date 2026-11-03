@@ -37,7 +37,12 @@ supplies the store configuration and an `authorize` callback, and holds every se
 
 - `GitServer.Plug`: routing, request-time config (`GitServer.Config`), HTTP Basic
   credentials and the host's `authorize` callback, the upload-pack advertisement, and
-  dispatch of upload-pack (v2) and receive-pack (v0) requests.
+  dispatch of upload-pack (v2) and receive-pack (v0) requests. A failing `authorize`
+  is caught and refused with a 500. `GitServer.HTTP`: the responses the Plug and the
+  protocol modules send (advertisements, results, text errors).
+- `GitServer.Failure`: a host callback's failure described for the log with nothing
+  it carries (no message, value or arguments). `GitServer.Worker`: runs a function in
+  an unlinked process, killed on timeout or when the caller dies.
 - `GitServer.UploadPack`: the v2 commands, `ls-refs` and `fetch`: negotiation, the want
   check, and the pack streamed on side-band 1. `GitServer.ObjectWalk`: reachability
   over an object database.
@@ -46,11 +51,17 @@ supplies the store configuration and an `authorize` callback, and holds every se
 - `GitServer.RepoName`: repository names from the request path.
 - `GitServer.State`: the text codec of a repository's `state` object (HEAD, refs,
   pack list). `GitServer.Repository`: the store layout, state reads, the conditional
-  state write, and snapshots (the listed packs downloaded to a temp directory).
-- `GitServer.ReceivePack`: push, the receive-pack advertisement and request: commands,
-  the pack indexed and checked against the state, the pack stored, then the
-  conditional state write retried while other pushes win. `GitServer.RefName`: the
-  ref names a push may update.
+  state write, `update` (the retry loop every state writer goes through: compute,
+  write conditionally, refresh and compute again on a lost race, up to a deadline),
+  and snapshots (the listed packs downloaded to a temp directory).
+- `GitServer.ReceivePack`: push, the receive-pack advertisement and request side:
+  reading and parsing the commands, the probe, the pack streamed to a file, and
+  report-status. `GitServer.ReceivePack.Update`: the push itself: the pack indexed and
+  checked against the state, the pack stored, then the state published through
+  `Repository.update`, with the host's `before_update` check run in its own process
+  on every attempt. `GitServer.Push`: what that check sees, and reading files at a
+  commit (`list_files`, `read_file`).
+  `GitServer.RefName`: the ref names a push may update.
 - `GitServer.Store`: the store behaviour (`get`, `get_file`, `put`, `put_file` with a
   condition, `delete`, `list`). `GitServer.Store.S3` is its implementation.
 

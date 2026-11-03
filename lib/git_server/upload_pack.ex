@@ -15,7 +15,7 @@ defmodule GitServer.UploadPack do
   """
 
   import Plug.Conn, only: [chunk: 2]
-  alias GitServer.{ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
+  alias GitServer.{Config, HTTP, Object, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
   alias GitServer.Pack.Writer
 
   @service "git-upload-pack"
@@ -89,7 +89,7 @@ defmodule GitServer.UploadPack do
         error(conn, "unsupported ls-refs argument #{inspect(argument)}")
 
       {:error, reason} ->
-        GitServer.Plug.store_error(conn, reason)
+        HTTP.store_error(conn, reason)
     end
   end
 
@@ -139,7 +139,7 @@ defmodule GitServer.UploadPack do
         PktLine.encode("#{id} #{name}#{peeled_attribute(name, id, peel)}\n")
       end
 
-    GitServer.Plug.result(conn, @service, [head, refs, PktLine.flush()])
+    HTTP.result(conn, @service, [head, refs, PktLine.flush()])
   end
 
   defp listed_refs(state, options) do
@@ -169,16 +169,19 @@ defmodule GitServer.UploadPack do
   defp peeled(db, hex) do
     with {:ok, id} <- ObjectId.from_hex(hex),
          {:ok, :tag, _size} <- ObjectDB.lookup(db, id) do
-      follow_tag(db, id)
+      follow_tag(db, id, Object.max_peel())
     else
       _ -> nil
     end
   end
 
-  defp follow_tag(db, id) do
+  # A chain longer than the bound goes without, like an unreadable tag.
+  defp follow_tag(_db, _id, 0), do: nil
+
+  defp follow_tag(db, id, n) do
     with {:ok, :tag, content} <- ObjectDB.read(db, id),
          {:ok, [{type, target}]} <- ObjectDB.parse_links(:tag, content) do
-      if type == :tag, do: follow_tag(db, target), else: ObjectId.to_hex(target)
+      if type == :tag, do: follow_tag(db, target, n - 1), else: ObjectId.to_hex(target)
     else
       _ -> nil
     end
@@ -244,7 +247,7 @@ defmodule GitServer.UploadPack do
     case check_wants(db, state, request.wants) do
       :ok when request.done -> send_pack(conn, db, request.wants, common, [])
       :ok when common != [] -> send_pack(conn, db, request.wants, common, acknowledgments(common))
-      :ok -> GitServer.Plug.result(conn, @service, nak())
+      :ok -> HTTP.result(conn, @service, nak())
       {:error, reason} -> error(conn, reason)
     end
   end
@@ -312,7 +315,7 @@ defmodule GitServer.UploadPack do
   end
 
   defp stream_pack(conn, db, ids, preamble) do
-    conn = GitServer.Plug.chunked_result(conn, @service)
+    conn = HTTP.chunked_result(conn, @service)
     conn = send_chunk(conn, [preamble, PktLine.encode("packfile\n")])
     emit = fn piece, conn -> send_chunk(conn, PktLine.sideband(1, piece)) end
 
@@ -337,7 +340,8 @@ defmodule GitServer.UploadPack do
   defp with_objects(conn, config, repo, fun) do
     result =
       Repository.with_snapshot(config.store, repo, config.temp_dir, fn snapshot ->
-        with {:ok, db} <- ObjectDB.open(snapshot.packs, max_object_bytes: config.max_object_bytes) do
+        with {:ok, db} <-
+               ObjectDB.open(snapshot.packs, Config.read_options(config, repo, fetch: true)) do
           try do
             fun.(snapshot, db)
           after
@@ -347,12 +351,12 @@ defmodule GitServer.UploadPack do
       end)
 
     case result do
-      {:error, reason} -> GitServer.Plug.store_error(conn, reason)
+      {:error, reason} -> HTTP.store_error(conn, reason)
       sent -> sent
     end
   end
 
   defp error(conn, reason) do
-    GitServer.Plug.result(conn, @service, PktLine.error(reason))
+    HTTP.result(conn, @service, PktLine.error(reason))
   end
 end

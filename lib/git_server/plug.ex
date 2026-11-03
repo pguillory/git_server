@@ -32,14 +32,17 @@ defmodule GitServer.Plug do
 
   It returns `:ok`, `:unauthorized` (HTTP 401 with a Basic challenge, so git asks
   for credentials) or `:forbidden` (403). The Authorization header is dropped from
-  the conn once checked, and credentials are never logged.
+  the conn once checked, and credentials are never logged. If the function raises,
+  throws, exits or returns anything else, the request is refused with HTTP 500 and
+  the log says only which: for a raise, throw or exit, its kind, an exception's
+  module and a stacktrace without arguments; for a return, not the value.
   """
 
   @behaviour Plug
 
   import Plug.Conn
   require Logger
-  alias GitServer.{Body, Config, PktLine, RepoName, ReceivePack, UploadPack}
+  alias GitServer.{Body, Config, HTTP, PktLine, RepoName, ReceivePack, UploadPack}
 
   @impl true
   def init(opts) do
@@ -58,7 +61,7 @@ defmodule GitServer.Plug do
         {:error, conn} -> conn
       end
     else
-      :not_found -> text(conn, 404, "Not found")
+      :not_found -> HTTP.text(conn, 404, "Not found")
     end
     |> halt()
   end
@@ -98,17 +101,33 @@ defmodule GitServer.Plug do
     # delete_req_header/2 would drop only the first of several.
     conn = %{conn | req_headers: Enum.reject(conn.req_headers, &match?({"authorization", _}, &1))}
 
-    case config.authorize.(request) do
+    case call_authorize(config.authorize, request) do
       :ok ->
         {:ok, conn}
 
       :unauthorized ->
         conn = put_resp_header(conn, "www-authenticate", ~s(Basic realm="git"))
-        {:error, text(conn, 401, "Authentication required")}
+        {:error, HTTP.text(conn, 401, "Authentication required")}
 
       :forbidden ->
-        {:error, text(conn, 403, "Forbidden")}
+        {:error, HTTP.text(conn, 403, "Forbidden")}
+
+      {:failed, what} ->
+        Logger.error("git_server: the authorize function #{what}")
+        {:error, HTTP.text(conn, 500, "Server error")}
     end
+  end
+
+  # The request holds the password and the Authorization header, so a failure is
+  # caught here and logged by kind only; uncaught, the HTTP server's crash report
+  # would print the call's arguments.
+  defp call_authorize(authorize, request) do
+    case authorize.(request) do
+      result when result in [:ok, :unauthorized, :forbidden] -> result
+      _other -> {:failed, "returned something other than :ok, :unauthorized or :forbidden"}
+    end
+  catch
+    kind, reason -> {:failed, GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
   end
 
   defp credentials(conn) do
@@ -126,9 +145,9 @@ defmodule GitServer.Plug do
 
   defp serve(conn, _config, _repo, :upload_pack_refs) do
     if protocol_v2?(conn) do
-      advertise(conn, "git-upload-pack", [
+      HTTP.advertise(conn, "git-upload-pack", [
         PktLine.encode("version 2\n"),
-        PktLine.encode("agent=#{agent()}\n"),
+        PktLine.encode("agent=#{HTTP.agent()}\n"),
         PktLine.encode("ls-refs=unborn\n"),
         PktLine.encode("fetch\n"),
         PktLine.encode("object-format=sha1\n"),
@@ -148,7 +167,7 @@ defmodule GitServer.Plug do
     # without its Git-Protocol header.
     case Body.read(conn, config.max_request_bytes) do
       {:ok, "0000", conn} ->
-        result(conn, "git-upload-pack", [])
+        HTTP.result(conn, "git-upload-pack", [])
 
       {:ok, body, conn} ->
         if protocol_v2?(conn),
@@ -156,7 +175,7 @@ defmodule GitServer.Plug do
           else: needs_v2(conn)
 
       {:error, reason, conn} ->
-        body_error(conn, reason)
+        HTTP.body_error(conn, reason)
     end
   end
 
@@ -173,66 +192,10 @@ defmodule GitServer.Plug do
   end
 
   defp needs_v2(conn) do
-    text(
+    HTTP.text(
       conn,
       400,
       "git_server needs Git protocol version 2 to fetch (git 2.26 or later, protocol.version=2)"
     )
-  end
-
-  @doc false
-  def advertise(conn, service, body) do
-    conn
-    |> put_resp_content_type("application/x-#{service}-advertisement", nil)
-    |> put_resp_header("cache-control", "no-cache")
-    |> send_resp(200, body)
-  end
-
-  # A service's whole response.
-  @doc false
-  def result(conn, service, body) do
-    conn |> result_headers(service) |> send_resp(200, body)
-  end
-
-  # Starts a service's streamed response; the caller sends the rest with `chunk/2`.
-  @doc false
-  def chunked_result(conn, service) do
-    conn |> result_headers(service) |> send_chunked(200)
-  end
-
-  defp result_headers(conn, service) do
-    conn
-    |> put_resp_content_type("application/x-#{service}-result", nil)
-    |> put_resp_header("cache-control", "no-cache")
-  end
-
-  @doc false
-  def body_error(conn, :too_large), do: text(conn, 413, "Request body too large")
-  def body_error(conn, :bad_gzip), do: text(conn, 400, "Malformed gzip request body")
-
-  def body_error(conn, :unsupported_encoding),
-    do: text(conn, 415, "Unsupported Content-Encoding")
-
-  def body_error(conn, _reason), do: text(conn, 400, "Could not read the request body")
-
-  # Store messages hold no secrets, but stay out of the response all the same.
-  @doc false
-  def store_error(conn, reason) do
-    Logger.error("git_server: store error: #{inspect(reason)}")
-    text(conn, 500, "Storage error")
-  end
-
-  # Git shows a text/plain error body to the user as `remote: ...` lines.
-  @doc false
-  def text(conn, status, message) do
-    conn
-    |> put_resp_content_type("text/plain")
-    |> put_resp_header("cache-control", "no-cache")
-    |> send_resp(status, message <> "\n")
-  end
-
-  @doc false
-  def agent do
-    "git_server/#{GitServer.version()}"
   end
 end

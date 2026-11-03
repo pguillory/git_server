@@ -78,6 +78,54 @@ defmodule GitServer.Object do
 
   def parse_links(:tree, content, max), do: tree_links(content, [], 0, max)
 
+  @doc """
+  The bound on a peel's steps from a ref, far more than anyone writes: `GitServer.Push`
+  counts tags, a commit and its tree against it, and ls-refs the tags alone.
+  """
+  def max_peel, do: 12
+
+  @doc """
+  A tree's entries in order, each `{kind, name, id}`: `kind` is `:tree`, `:file`,
+  `:executable`, `:symlink` or `:submodule`, read from the entry's mode the way git
+  reads it. Returns `{:error, "malformed tree"}` when the content isn't a tree.
+  """
+  @spec tree_entries(binary) ::
+          {:ok, [{:tree | :file | :executable | :symlink | :submodule, binary, ObjectId.t()}]}
+          | {:error, String.t()}
+  def tree_entries(content), do: tree_entries(content, [])
+
+  defp tree_entries(content, acc) do
+    case next_entry(content) do
+      :done ->
+        {:ok, Enum.reverse(acc)}
+
+      {:ok, kind, mode, name, id, rest} ->
+        kind =
+          case kind do
+            :tree -> :tree
+            :gitlink -> :submodule
+            :blob -> blob_kind(mode)
+          end
+
+        tree_entries(rest, [{kind, :binary.copy(name), :binary.copy(id)} | acc])
+
+      :error ->
+        {:error, "malformed tree"}
+    end
+  end
+
+  # A blob entry is a symlink (120000), an executable (the owner's execute bit, which
+  # is all git checks out) or a file.
+  defp blob_kind(mode) do
+    mode = String.to_integer(mode, 8)
+
+    cond do
+      Bitwise.band(mode, 0o170000) == 0o120000 -> :symlink
+      Bitwise.band(mode, 0o100) != 0 -> :executable
+      true -> :file
+    end
+  end
+
   # Whether `n` links fit within `max`.
   defp room(n, max) when n <= max, do: :ok
   defp room(_n, _max), do: :too_many
@@ -105,22 +153,40 @@ defmodule GitServer.Object do
 
   defp parents(_content, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
 
-  defp tree_links(<<>>, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
-
   defp tree_links(content, acc, n, max) do
+    case next_entry(content) do
+      :done ->
+        {:ok, Enum.reverse(acc)}
+
+      {:ok, :gitlink, _mode, _name, _id, rest} ->
+        tree_links(rest, acc, n, max)
+
+      {:ok, _type, _mode, _name, _id, _rest} when n >= max ->
+        {:error, "too many links"}
+
+      {:ok, type, _mode, _name, id, rest} ->
+        tree_links(rest, [{type, :binary.copy(id)} | acc], n + 1, max)
+
+      :error ->
+        {:error, "malformed tree"}
+    end
+  end
+
+  # The tree entry at the start of `content`: `{:ok, kind, mode, name, id, rest}`, with
+  # `kind` from `entry_kind/1` and `name` and `id` still sub-binaries of `content`,
+  # `:done` at the end, or `:error`.
+  defp next_entry(<<>>), do: :done
+
+  defp next_entry(content) do
     id_size = ObjectId.size()
 
     with [mode, rest] <- :binary.split(content, " "),
          {:ok, kind} <- entry_kind(mode),
          [name, <<id::binary-size(id_size), rest::binary>>] when name != "" <-
            :binary.split(rest, <<0>>) do
-      case kind do
-        :gitlink -> tree_links(rest, acc, n, max)
-        _type when n >= max -> {:error, "too many links"}
-        type -> tree_links(rest, [{type, :binary.copy(id)} | acc], n + 1, max)
-      end
+      {:ok, kind, mode, name, id, rest}
     else
-      _ -> {:error, "malformed tree"}
+      _ -> :error
     end
   end
 

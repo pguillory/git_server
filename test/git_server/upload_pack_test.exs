@@ -2,9 +2,20 @@ defmodule GitServer.UploadPackTest do
   # Repositories seeded in the store with packs real git wrote, read with the real git
   # client. Requests that client never sends go through Plug.Test.
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
   import GitServer.TestGit
   import Plug.Conn, only: [put_req_header: 3]
-  alias GitServer.{GitFixture, ObjectId, PktLine, Repository, Seed, Store, TestServer}
+
+  alias GitServer.{
+    GitFixture,
+    ObjectId,
+    PackBuilder,
+    PktLine,
+    Repository,
+    Seed,
+    Store,
+    TestServer
+  }
 
   @moduletag :tmp_dir
 
@@ -161,6 +172,164 @@ defmodule GitServer.UploadPackTest do
 
       :ok = Store.delete(server.store, Repository.pack_key("repo", pack))
       assert git(["ls-remote", "--heads", url]) == {"#{commit}\trefs/heads/main\n", 0}
+    end
+
+    test "ls-refs leaves a tag chain longer than the bound unpeeled", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      commit = Seed.commit!(source, "file", "one\n")
+      max = GitServer.Object.max_peel()
+
+      # t1 tags the commit, and each tag after it the one before.
+      for n <- 1..(max + 1) do
+        target = if n == 1, do: "HEAD", else: "t#{n - 1}"
+
+        {_, 0} =
+          git(["-c", "advice.nestedTag=false", "tag", "-a", "t#{n}", "-m", "t#{n}", target],
+            cd: source.repo
+          )
+      end
+
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      url = TestServer.url(server, "repo")
+
+      {output, 0} = git(["ls-remote", url, "refs/tags/t#{max}*"])
+      assert output =~ "#{commit}\trefs/tags/t#{max}^{}\n"
+      {output, 0} = git(["ls-remote", url, "refs/tags/t#{max + 1}*"])
+      assert output == "#{Seed.rev_parse!(source, "t#{max + 1}")}\trefs/tags/t#{max + 1}\n"
+    end
+
+    test "a pack index that doesn't match its pack fails a fetch and a push, logged",
+         %{tmp_dir: tmp_dir} do
+      source = Seed.source!(Path.join(tmp_dir, "a"))
+      Seed.commit!(source, "file", "one\n")
+      other = Seed.source!(Path.join(tmp_dir, "b"))
+      Seed.commit!(other, "file", "two\n")
+      server = TestServer.start!()
+      pack = Seed.push!(server.store, "repo", source)
+      other_pack = Seed.push!(server.store, "other", other)
+      {:ok, idx, _etag} = Store.get(server.store, Repository.idx_key("other", other_pack))
+      {:ok, _} = Store.put(server.store, Repository.idx_key("repo", pack), idx, :none)
+      url = TestServer.url(server, "repo")
+
+      log =
+        capture_log(fn ->
+          {output, 128} = git(["clone", "-q", url, Path.join(tmp_dir, "clone")])
+          assert output =~ "500"
+        end)
+
+      assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
+
+      log =
+        capture_log(fn ->
+          Seed.commit!(source, "file", "three\n")
+          {output, 1} = git(["push", url, "main"], cd: source.repo)
+          assert output =~ "storage error"
+        end)
+
+      assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
+    end
+
+    test "a fetch over its work budget fails, logged", %{tmp_dir: tmp_dir} do
+      # Small blobs, each a delta of one base too big for the cache, so every read
+      # inflates the base again for a few bytes of output.
+      big = String.duplicate("x", 40_000_000)
+      base_id = GitServer.Object.id(:blob, big)
+      blobs = for n <- 1..10, do: {"f#{n}", "small #{n}\n"}
+
+      tree =
+        blobs
+        |> Enum.sort()
+        |> Enum.map_join(fn {name, content} ->
+          "100644 #{name}\0" <> GitServer.Object.id(:blob, content)
+        end)
+
+      tree_id = GitServer.Object.id(:tree, tree)
+
+      commit =
+        "tree #{ObjectId.to_hex(tree_id)}\nauthor A <a@example.com> 0 +0000\n" <>
+          "committer A <a@example.com> 0 +0000\n\nhostile\n"
+
+      {pack, idx_entries} =
+        PackBuilder.build(
+          [
+            PackBuilder.object(:commit, commit),
+            PackBuilder.object(:tree, tree),
+            PackBuilder.object(:blob, big),
+          ] ++
+            for {_name, content} <- blobs do
+              PackBuilder.ref_delta(
+                GitServer.Object.id(:blob, content),
+                base_id,
+                PackBuilder.insert_delta(40_000_000, content)
+              )
+            end
+        )
+
+      checksum = binary_part(pack, byte_size(pack) - 20, 20)
+      name = ObjectId.to_hex(checksum)
+      server = TestServer.start!(max_fetch_work_bytes: 100_000_000)
+      {:ok, _} = Store.put(server.store, Repository.pack_key("repo", name), pack, :none)
+
+      {:ok, _} =
+        Store.put(
+          server.store,
+          Repository.idx_key("repo", name),
+          GitServer.Pack.Idx.encode(idx_entries, checksum),
+          :none
+        )
+
+      commit_hex = ObjectId.to_hex(GitServer.Object.id(:commit, commit))
+
+      state = %GitServer.State{
+        head: "refs/heads/main",
+        refs: %{"refs/heads/main" => commit_hex},
+        packs: [name],
+      }
+
+      {:ok, _} = Repository.put_state(server.store, "repo", state, :absent)
+
+      log =
+        capture_log(fn ->
+          {output, 128} =
+            git(["clone", "-q", TestServer.url(server, "repo"), Path.join(tmp_dir, "clone")])
+
+          assert output =~ "too much work resolving delta bases"
+        end)
+
+      assert log =~ "repository repo: pack #{name}.pack: too much work resolving delta bases"
+      assert length(String.split(log, "too much work")) == 2
+    end
+
+    test "large compressible blobs clone under the default work budget", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+
+      for name <- ~w(a b c) do
+        Seed.commit!(source, name, String.duplicate(name <> "012345678", 4_000_000))
+      end
+
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      clone = clone!(server, "repo", tmp_dir)
+      assert File.stat!(Path.join(clone, "c")).size == 40_000_000
+      assert_fsck_clean(clone)
+    end
+
+    test "a large file changed many times clones on the work allowance alone",
+         %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      # Too big for the base cache, so every version resolves its delta base again.
+      lines = for i <- 1..800_000, do: "line #{i} of a large data file, padded out\n"
+
+      for round <- 1..8 do
+        Seed.commit!(source, "data", List.replace_at(lines, round * 1000, "round #{round}\n"))
+      end
+
+      server = TestServer.start!(max_fetch_work_bytes: 1)
+      Seed.push!(server.store, "repo", source)
+      clone = clone!(server, "repo", tmp_dir)
+      assert File.stat!(Path.join(clone, "data")).size > 32_000_000
+      assert_fsck_clean(clone)
     end
 
     test "a request too big for one POST, probed first", %{tmp_dir: tmp_dir} do
@@ -349,9 +518,17 @@ defmodule GitServer.UploadPackTest do
       Seed.push!(store, "big", source)
 
       opts = [max_object_bytes: 1000] ++ opts
-      assert ["packfile\n" | rest] = fetch(opts, ["want #{big}", "done"], "big")
-      assert List.last(rest) == :flush
-      assert [<<3, "git_server: object too large\n">>] = for(<<3, _::binary>> = p <- rest, do: p)
+
+      log =
+        capture_log(fn ->
+          assert ["packfile\n" | rest] = fetch(opts, ["want #{big}", "done"], "big")
+          assert List.last(rest) == :flush
+
+          assert [<<3, "git_server: object too large\n">>] =
+                   for(<<3, _::binary>> = p <- rest, do: p)
+        end)
+
+      assert log =~ ~r/repository big: pack [0-9a-f]{40}\.pack: object too large/
       assert File.ls!(context.temp_dir) == []
     end
 

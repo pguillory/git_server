@@ -35,6 +35,38 @@ defmodule GitServer.Pack.StoredPackTest do
     assert ObjectDB.read(db, id2) == {:ok, :blob, "brand new"}
   end
 
+  test "the base work budget charges bases resolved for little output", %{tmp_dir: dir} do
+    big = String.duplicate("a", 10_000)
+    id = GitServer.Object.id(:blob, "tiny")
+    entries = [object(:blob, big), ofs_delta(id, 0, insert_delta(10_000, "tiny"))]
+
+    # With no cache, every read of the 4-byte delta inflates its 10,000-byte base again,
+    # and earns only 4 bytes of allowance.
+    opts = [max_base_work_bytes: 25_000, cache_bytes: 0, max_delta_depth: 1]
+    {:ok, db} = open(dir, entries, opts)
+    assert ObjectDB.read(db, id) == {:ok, :blob, "tiny"}
+    assert ObjectDB.read(db, id) == {:ok, :blob, "tiny"}
+    assert ObjectDB.read(db, id) == {:error, "too much work resolving delta bases"}
+  end
+
+  test "a long chain of same-size versions, read in full, stays within any floor",
+       %{tmp_dir: dir} do
+    [first | rest] = for n <- 0..20, do: String.duplicate(<<?a + n>>, 1000)
+
+    # Each version a delta of the one before, as git stores a file's history.
+    entries =
+      [object(:blob, first)] ++
+        for {content, n} <- Enum.with_index(rest),
+            do: ofs_delta(GitServer.Object.id(:blob, content), n, insert_delta(1000, content))
+
+    {:ok, db} = open(dir, entries, max_base_work_bytes: 1, cache_bytes: 0, max_delta_depth: 20)
+
+    # The deepest first, the costliest order.
+    for content <- Enum.reverse([first | rest]) do
+      assert ObjectDB.read(db, GitServer.Object.id(:blob, content)) == {:ok, :blob, content}
+    end
+  end
+
   test "a REF_DELTA whose base isn't in the pack", %{tmp_dir: dir} do
     id = :binary.copy(<<1>>, 20)
     {:ok, db} = open(dir, [ref_delta(id, :binary.copy(<<2>>, 20), insert_delta(1, "a"))])
