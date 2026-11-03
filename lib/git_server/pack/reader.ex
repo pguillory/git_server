@@ -8,9 +8,10 @@ defmodule GitServer.Pack.Reader do
   chain is walked iteratively down to a whole object (or a cached one) and then
   applied back up, so the working set is one base and one result plus the cache.
 
-  `budget` is charged for all the work of a read, and `base_budget` only for the
-  work of resolving the bases under the object read: inflating them and applying
-  their deltas, which the cache would have saved. Either may be nil.
+  `budget` is charged for all the work of a read. `base_budget` is charged, without
+  a check, only for the work of resolving the bases under the object read: inflating
+  them and applying their deltas, which a cache hit would have saved; the caller
+  credits it for what it reads and checks it with `settle/2`. Either may be nil.
 
   Errors are thrown as `{:pack_error, reason}`, and a REF_DELTA base that `ref` can't
   find as `{:missing_base, id}`; callers turn them into `{:error, reason}`.
@@ -39,6 +40,16 @@ defmodule GitServer.Pack.Reader do
     if :counters.get(ref, 1) > max, do: fail(message)
     :ok
   end
+
+  @doc false
+  # Charges a budget without checking it.
+  def add(nil, _bytes), do: :ok
+  def add({ref, _max, _message}, bytes), do: :counters.add(ref, 1, bytes)
+
+  @doc false
+  # Credits a budget and checks it.
+  def settle(nil, _credit), do: :ok
+  def settle(budget, credit), do: charge(budget, -credit)
 
   @doc "Parses the entry header at `offset`."
   def entry(%__MODULE__{} = r, offset) do
@@ -96,7 +107,7 @@ defmodule GitServer.Pack.Reader do
             content = inflate(r, e)
 
             if deltas != [] do
-              charge(r.base_budget, inflate_work(e))
+              add(r.base_budget, inflate_work(e))
               Cache.put(r.cache, {r.key, offset}, {type, content, 0}, e.size)
             end
 
@@ -137,7 +148,7 @@ defmodule GitServer.Pack.Reader do
         case Delta.apply(base, inflate(r, e), r.max_object_bytes) do
           {:ok, result} ->
             charge(r.budget, byte_size(result))
-            if n < last, do: charge(r.base_budget, inflate_work(e) + byte_size(result))
+            if n < last, do: add(r.base_budget, inflate_work(e) + byte_size(result))
             Cache.put(r.cache, {r.key, e.offset}, {type, result, depth + 1}, byte_size(result))
             {type, result, depth + 1}
 

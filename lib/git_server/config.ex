@@ -12,10 +12,12 @@ defmodule GitServer.Config do
     (default 50 MB).
   - `:max_delta_depth`: the longest delta chain, in a push or a stored pack
     (default 100).
-  - `:max_fetch_work_bytes`: how much work one fetch may spend re-resolving delta
-    bases its object cache couldn't keep, in bytes inflated and produced (default
-    1 GB). The objects sent never count, only the bases under them, so this bounds a
-    pack built to make every clone walk long delta chains.
+  - `:max_fetch_work_bytes`: how much work one fetch may spend resolving the delta
+    bases under the objects it reads, in bytes inflated and produced, beyond an
+    allowance of twice `max_delta_depth` times the bytes it reads (default 1 GB). The
+    objects themselves never count. So a history of large files changed many times
+    stays within it, while a pack built to make a fetch resolve the same long chains
+    again and again for little output doesn't.
   - `:max_request_bytes`: the largest upload-pack request body, raw and inflated
     (default 10 MB).
   - `:max_command_bytes`: the largest command section of a push (default 1 MB).
@@ -88,13 +90,17 @@ defmodule GitServer.Config do
 
   @doc """
   The options for reading a repository's stored packs (`GitServer.ObjectDB`): the
-  limits, and a log label naming the repository.
+  limits, and a log label naming the repository. A fetch (`fetch: true`) also has
+  its work budget.
   """
-  def read_options(%__MODULE__{} = config, repo) do
+  def read_options(%__MODULE__{} = config, repo, opts \\ []) do
+    budget =
+      if opts[:fetch], do: [max_base_work_bytes: config.max_fetch_work_bytes], else: []
+
     [
       max_object_bytes: config.max_object_bytes,
       max_delta_depth: config.max_delta_depth,
       log_label: "repository #{repo}",
-    ]
+    ] ++ budget
   end
 end

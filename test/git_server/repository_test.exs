@@ -118,4 +118,15 @@ defmodule GitServer.RepositoryTest do
     assert Repository.update(snapshot, past, write) == {:error, :deadline, :tried}
     Repository.release(snapshot)
   end
+
+  @tag :tmp_dir
+  test "update gives the store's reason when a write fails", %{tmp_dir: tmp_dir} do
+    store = GitServer.FailingStore.wrap(GitServer.TestStore.fresh(), "/state", 1)
+    {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir)
+    write = fn snapshot, _last -> {:write, snapshot.state, :tried} end
+    deadline = System.monotonic_time(:millisecond) + 10_000
+    assert Repository.update(snapshot, deadline, write) == {:error, "injected failure", :tried}
+    assert Repository.update(snapshot, deadline, write) == {:ok, :tried}
+    Repository.release(snapshot)
+  end
 end

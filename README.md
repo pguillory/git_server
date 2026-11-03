@@ -104,13 +104,11 @@ bodies unread.
 - `:max_object_bytes`: the largest object, inflated, in a push or a stored pack. Default
   50 MB.
 - `:max_delta_depth`: the longest delta chain, in a push or a stored pack. Default 100.
-
-The pack size and object count limit what a push may send; a pack already stored is
-read whatever its size and count.
-- `:max_fetch_work_bytes`: how much work one fetch may spend re-resolving delta bases
-  its object cache couldn't keep, in bytes inflated and produced. The objects sent never
-  count, only the bases under them, so a legal history of large blobs never trips it, but
-  a pack built to make every clone walk long delta chains does. Default 1 GB.
+- `:max_fetch_work_bytes`: how much work one fetch may spend resolving the delta bases
+  under the objects it reads, in bytes inflated and produced, beyond an allowance of
+  twice `:max_delta_depth` times the bytes it reads. The objects themselves never count. So a
+  history of large files changed many times stays within it, while a pack built to make
+  a fetch resolve the same long chains again and again for little output doesn't. Default 1 GB.
 - `:max_request_bytes`: the largest upload-pack request body, raw and inflated. Default
   10 MB.
 - `:max_command_bytes`: the largest command section of a push. Default 1 MB.
@@ -119,6 +117,9 @@ read whatever its size and count.
 - `:before_update`: a function that checks a push before it changes anything. See below.
 - `:before_update_timeout_ms`: how long one call of `:before_update` may run before the
   push is refused. Default 30 seconds.
+
+The pack size and object count limit what a push may send; a pack already stored is
+read whatever its size and count.
 
 Give them directly as the Plug's options, or as `config:` naming a function (`{module,
 function, args}` or a zero-arity function) that returns them on each request.

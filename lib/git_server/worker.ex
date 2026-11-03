@@ -48,7 +48,7 @@ defmodule GitServer.Worker do
   end
 
   # Waits for `caller` or `worker` to die, and kills `worker` if `caller` died first.
-  def guard(caller, worker) do
+  defp guard(caller, worker) do
     caller_monitor = Process.monitor(caller)
     worker_monitor = Process.monitor(worker)
 

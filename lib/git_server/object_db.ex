@@ -12,13 +12,18 @@ defmodule GitServer.ObjectDB do
     * `:max_object_bytes` - the largest object (or delta) to inflate (default 50 MB)
     * `:max_delta_depth` - the longest delta chain to follow (default 100)
     * `:cache_bytes` - the size of the resolved-base cache (default 32 MB)
-    * `:max_base_work_bytes` - bytes inflated and produced by deltas, across every
-      read, in resolving delta bases under the objects read: what the cache misses
-      cost, never the work of producing the objects themselves. Past it, reads fail
-      with `"too much work resolving delta bases"` (default unlimited)
-    * `:log_label` - when given, such as `"repository alice/notes"`, every error
+    * `:max_base_work_bytes` - a cap on the work of resolving delta bases under the
+      objects read (bytes inflated and produced by deltas: what cache misses cost,
+      never the work of producing the objects themselves), across every read. Each
+      object read raises the cap by twice `max_delta_depth` times its size, so a chain
+      read in full, whose re-resolution grows with its depth and the bytes it
+      yields, stays within it, while bases resolved again and again for little
+      output don't. Past it, reads fail with `"too much work resolving delta bases"` (default
+      unlimited)
+    * `:log_label` - when given, such as `"repository alice/notes"`, the first error
       opening or reading a pack is also logged at error level with this label, the
-      pack's file name and the reason, never object content (default none)
+      pack's file name and the reason, never object content (default none). Later
+      errors from the same open database aren't logged again.
   """
 
   require Logger
@@ -26,7 +31,7 @@ defmodule GitServer.ObjectDB do
   alias GitServer.{Object, ObjectId, Pack}
   alias GitServer.Pack.{Cache, Idx, Reader}
 
-  defstruct [:packs, :cache, :names, :log_label]
+  defstruct [:packs, :cache, :names, :log_label, :logged]
 
   @type t :: %__MODULE__{}
 
@@ -83,6 +88,7 @@ defmodule GitServer.ObjectDB do
            cache: cache,
            names: List.to_tuple(names),
            log_label: opts[:log_label],
+           logged: :atomics.new(1, []),
          }}
 
       {:error, reason, acc} ->
@@ -193,6 +199,9 @@ defmodule GitServer.ObjectDB do
   def read(%__MODULE__{} = db, id) do
     with_pack(db, id, fn reader, offset ->
       {type, content} = Reader.read(reader, offset)
+      # A chain step costs its delta's inflating and its result, about twice the
+      # object's size when a file's versions are alike.
+      Reader.settle(reader.base_budget, 2 * reader.max_delta_depth * byte_size(content))
       {:ok, type, content}
     end)
   end
@@ -209,7 +218,9 @@ defmodule GitServer.ObjectDB do
       case Idx.offset(idx, id) do
         {:ok, offset} ->
           with {:error, reason} <- run(fn -> fun.(reader, offset) end) do
-            log(db.log_label, elem(db.names, reader.key), reason)
+            if :atomics.compare_exchange(db.logged, 1, 0, 1) == :ok,
+              do: log(db.log_label, elem(db.names, reader.key), reason)
+
             {:error, reason}
           end
 

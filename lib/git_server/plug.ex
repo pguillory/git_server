@@ -42,8 +42,7 @@ defmodule GitServer.Plug do
 
   import Plug.Conn
   require Logger
-  alias GitServer.{Body, Config, PktLine, RepoName, ReceivePack, UploadPack}
-  import GitServer.HTTP
+  alias GitServer.{Body, Config, HTTP, PktLine, RepoName, ReceivePack, UploadPack}
 
   @impl true
   def init(opts) do
@@ -62,7 +61,7 @@ defmodule GitServer.Plug do
         {:error, conn} -> conn
       end
     else
-      :not_found -> text(conn, 404, "Not found")
+      :not_found -> HTTP.text(conn, 404, "Not found")
     end
     |> halt()
   end
@@ -108,14 +107,14 @@ defmodule GitServer.Plug do
 
       :unauthorized ->
         conn = put_resp_header(conn, "www-authenticate", ~s(Basic realm="git"))
-        {:error, text(conn, 401, "Authentication required")}
+        {:error, HTTP.text(conn, 401, "Authentication required")}
 
       :forbidden ->
-        {:error, text(conn, 403, "Forbidden")}
+        {:error, HTTP.text(conn, 403, "Forbidden")}
 
       {:failed, what} ->
         Logger.error("git_server: the authorize function #{what}")
-        {:error, text(conn, 500, "Server error")}
+        {:error, HTTP.text(conn, 500, "Server error")}
     end
   end
 
@@ -146,9 +145,9 @@ defmodule GitServer.Plug do
 
   defp serve(conn, _config, _repo, :upload_pack_refs) do
     if protocol_v2?(conn) do
-      advertise(conn, "git-upload-pack", [
+      HTTP.advertise(conn, "git-upload-pack", [
         PktLine.encode("version 2\n"),
-        PktLine.encode("agent=#{agent()}\n"),
+        PktLine.encode("agent=#{HTTP.agent()}\n"),
         PktLine.encode("ls-refs=unborn\n"),
         PktLine.encode("fetch\n"),
         PktLine.encode("object-format=sha1\n"),
@@ -168,7 +167,7 @@ defmodule GitServer.Plug do
     # without its Git-Protocol header.
     case Body.read(conn, config.max_request_bytes) do
       {:ok, "0000", conn} ->
-        result(conn, "git-upload-pack", [])
+        HTTP.result(conn, "git-upload-pack", [])
 
       {:ok, body, conn} ->
         if protocol_v2?(conn),
@@ -176,7 +175,7 @@ defmodule GitServer.Plug do
           else: needs_v2(conn)
 
       {:error, reason, conn} ->
-        body_error(conn, reason)
+        HTTP.body_error(conn, reason)
     end
   end
 
@@ -193,7 +192,7 @@ defmodule GitServer.Plug do
   end
 
   defp needs_v2(conn) do
-    text(
+    HTTP.text(
       conn,
       400,
       "git_server needs Git protocol version 2 to fetch (git 2.26 or later, protocol.version=2)"

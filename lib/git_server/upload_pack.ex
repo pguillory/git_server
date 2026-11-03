@@ -341,11 +341,7 @@ defmodule GitServer.UploadPack do
     result =
       Repository.with_snapshot(config.store, repo, config.temp_dir, fn snapshot ->
         with {:ok, db} <-
-               ObjectDB.open(
-                 snapshot.packs,
-                 [max_base_work_bytes: config.max_fetch_work_bytes] ++
-                   Config.read_options(config, repo)
-               ) do
+               ObjectDB.open(snapshot.packs, Config.read_options(config, repo, fetch: true)) do
           try do
             fun.(snapshot, db)
           after

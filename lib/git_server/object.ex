@@ -79,9 +79,8 @@ defmodule GitServer.Object do
   def parse_links(:tree, content, max), do: tree_links(content, [], 0, max)
 
   @doc """
-  The most steps a peel follows from a ref: tags (which may point at tags), then a
-  commit, then its tree. Far more than anyone writes, and a bound on a chain built
-  to be long.
+  The bound on a peel's steps from a ref, far more than anyone writes: `GitServer.Push`
+  counts tags, a commit and its tree against it, and ls-refs the tags alone.
   """
   def max_peel, do: 12
 
