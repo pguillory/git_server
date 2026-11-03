@@ -322,6 +322,9 @@ The store must support conditional PUT (`If-Match` and `If-None-Match: *`).
 These rest on the bucket's conditional writes being atomic. Tests cover them on MinIO,
 including two writers racing for one key.
 
+[docs/design.md](docs/design.md) compares this design with other Git-on-object-storage
+designs and says what it took from each.
+
 The server does not refuse a forced push: a client's `--force` replaces the branch. Use
 `authorize` to limit who may write, or `:before_update` to refuse rewrites.
 
