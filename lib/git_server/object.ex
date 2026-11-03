@@ -88,25 +88,23 @@ defmodule GitServer.Object do
           | {:error, String.t()}
   def tree_entries(content), do: tree_entries(content, [])
 
-  defp tree_entries(<<>>, acc), do: {:ok, Enum.reverse(acc)}
-
   defp tree_entries(content, acc) do
-    id_size = ObjectId.size()
+    case next_entry(content) do
+      :done ->
+        {:ok, Enum.reverse(acc)}
 
-    with [mode, rest] <- :binary.split(content, " "),
-         {:ok, kind} <- entry_kind(mode),
-         [name, <<id::binary-size(id_size), rest::binary>>] when name != "" <-
-           :binary.split(rest, <<0>>) do
-      kind =
-        case kind do
-          :tree -> :tree
-          :gitlink -> :submodule
-          :blob -> blob_kind(mode)
-        end
+      {:ok, kind, mode, name, id, rest} ->
+        kind =
+          case kind do
+            :tree -> :tree
+            :gitlink -> :submodule
+            :blob -> blob_kind(mode)
+          end
 
-      tree_entries(rest, [{kind, :binary.copy(name), :binary.copy(id)} | acc])
-    else
-      _ -> {:error, "malformed tree"}
+        tree_entries(rest, [{kind, :binary.copy(name), :binary.copy(id)} | acc])
+
+      :error ->
+        {:error, "malformed tree"}
     end
   end
 
@@ -149,22 +147,40 @@ defmodule GitServer.Object do
 
   defp parents(_content, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
 
-  defp tree_links(<<>>, acc, _n, _max), do: {:ok, Enum.reverse(acc)}
-
   defp tree_links(content, acc, n, max) do
+    case next_entry(content) do
+      :done ->
+        {:ok, Enum.reverse(acc)}
+
+      {:ok, :gitlink, _mode, _name, _id, rest} ->
+        tree_links(rest, acc, n, max)
+
+      {:ok, _type, _mode, _name, _id, _rest} when n >= max ->
+        {:error, "too many links"}
+
+      {:ok, type, _mode, _name, id, rest} ->
+        tree_links(rest, [{type, :binary.copy(id)} | acc], n + 1, max)
+
+      :error ->
+        {:error, "malformed tree"}
+    end
+  end
+
+  # The tree entry at the start of `content`: `{:ok, kind, mode, name, id, rest}`, with
+  # `kind` from `entry_kind/1` and `name` and `id` still sub-binaries of `content`,
+  # `:done` at the end, or `:error`.
+  defp next_entry(<<>>), do: :done
+
+  defp next_entry(content) do
     id_size = ObjectId.size()
 
     with [mode, rest] <- :binary.split(content, " "),
          {:ok, kind} <- entry_kind(mode),
          [name, <<id::binary-size(id_size), rest::binary>>] when name != "" <-
            :binary.split(rest, <<0>>) do
-      case kind do
-        :gitlink -> tree_links(rest, acc, n, max)
-        _type when n >= max -> {:error, "too many links"}
-        type -> tree_links(rest, [{type, :binary.copy(id)} | acc], n + 1, max)
-      end
+      {:ok, kind, mode, name, id, rest}
     else
-      _ -> {:error, "malformed tree"}
+      _ -> :error
     end
   end
 
