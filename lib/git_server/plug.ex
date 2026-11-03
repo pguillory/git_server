@@ -32,7 +32,9 @@ defmodule GitServer.Plug do
 
   It returns `:ok`, `:unauthorized` (HTTP 401 with a Basic challenge, so git asks
   for credentials) or `:forbidden` (403). The Authorization header is dropped from
-  the conn once checked, and credentials are never logged.
+  the conn once checked, and credentials are never logged. If the function raises,
+  throws, exits or returns anything else, the request is refused with HTTP 500 and
+  the log gets only the kind of failure and a stacktrace without arguments.
   """
 
   @behaviour Plug
@@ -98,7 +100,7 @@ defmodule GitServer.Plug do
     # delete_req_header/2 would drop only the first of several.
     conn = %{conn | req_headers: Enum.reject(conn.req_headers, &match?({"authorization", _}, &1))}
 
-    case config.authorize.(request) do
+    case call_authorize(config.authorize, request) do
       :ok ->
         {:ok, conn}
 
@@ -108,7 +110,23 @@ defmodule GitServer.Plug do
 
       :forbidden ->
         {:error, text(conn, 403, "Forbidden")}
+
+      {:failed, what} ->
+        Logger.error("git_server: the authorize function #{what}")
+        {:error, text(conn, 500, "Server error")}
     end
+  end
+
+  # The request holds the password and the Authorization header, so a failure is
+  # caught here and logged by kind only; uncaught, the HTTP server's crash report
+  # would print the call's arguments.
+  defp call_authorize(authorize, request) do
+    case authorize.(request) do
+      result when result in [:ok, :unauthorized, :forbidden] -> result
+      _other -> {:failed, "returned something other than :ok, :unauthorized or :forbidden"}
+    end
+  catch
+    kind, reason -> {:failed, GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
   end
 
   defp credentials(conn) do

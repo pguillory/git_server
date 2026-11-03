@@ -506,7 +506,7 @@ defmodule GitServer.ReceivePack do
             _other -> {:failed, "returned something other than :ok or {:reject, message}"}
           end
         catch
-          kind, reason -> {:failed, failure(kind, reason, __STACKTRACE__)}
+          kind, reason -> {:failed, GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
         after
           ObjectDB.close(db)
         end
@@ -514,27 +514,6 @@ defmodule GitServer.ReceivePack do
       {:error, reason} ->
         {:storage, reason}
     end
-  end
-
-  defp failure(:error, reason, stacktrace) do
-    exception = Exception.normalize(:error, reason, stacktrace)
-    "raised #{inspect(exception.__struct__)}\n" <> locations(stacktrace)
-  end
-
-  defp failure(:throw, _value, stacktrace), do: "threw\n" <> locations(stacktrace)
-  defp failure(:exit, _reason, stacktrace), do: "exited\n" <> locations(stacktrace)
-
-  # The stacktrace without arguments, which could hold pushed content.
-  defp locations(stacktrace) do
-    stacktrace
-    |> Enum.map(fn
-      {module, function, args, location} when is_list(args) ->
-        {module, function, length(args), location}
-
-      entry ->
-        entry
-    end)
-    |> Exception.format_stacktrace()
   end
 
   defp check_failed(what) do
