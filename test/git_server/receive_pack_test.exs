@@ -113,7 +113,7 @@ defmodule GitServer.ReceivePackTest do
     {output, 1} = git(["push", TestServer.url(few_objects, "big"), "main"], cd: local)
     assert output =~ "too many objects"
     {output, 1} = git(["push", TestServer.url(no_deltas, "big"), "main"], cd: local)
-    assert output =~ "delta chain too deep"
+    assert output =~ "error: remote unpack failed: delta chain too deep (limit 0)\n"
     {_, 0} = git(["push", TestServer.url(server, "big"), "main"], cd: local)
 
     # A stored pack is read whatever its object count, but not past the delta depth.
@@ -262,7 +262,7 @@ defmodule GitServer.ReceivePackTest do
     log =
       capture_log(fn ->
         {output, 1} = git(["push", url, "main"], cd: local)
-        assert output =~ "storage error"
+        assert output =~ "main -> main (storage failed, try again later)"
       end)
 
     assert log =~ "injected failure"

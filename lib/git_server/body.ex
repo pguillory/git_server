@@ -178,6 +178,66 @@ defmodule GitServer.Body do
     end
   end
 
+  @doc """
+  The body's declared size: its Content-Length (raw, before any gzip), or nil when it
+  has none, as with a chunked body.
+  """
+  def declared_length(%__MODULE__{conn: conn}) do
+    with [value] <- Plug.Conn.get_req_header(conn, "content-length"),
+         {length, ""} <- Integer.parse(value) do
+      length
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Reads and discards the rest of `conn`'s body, raw, so that a reply after an early
+  stop reaches a client that is still sending (one that can't send all of it first
+  sees only a broken pipe). Returns `{:ok, conn}` once the body has all arrived, or
+  `{:error, conn}` past `max_bytes` more, after `timeout_ms`, or on a read error, when
+  the connection is best closed after the reply. Takes the conn a failed or closed
+  reader returned.
+  """
+  def drain(conn, max_bytes, timeout_ms) do
+    drain_loop(conn, max_bytes, System.monotonic_time(:millisecond) + timeout_ms)
+  end
+
+  defp drain_loop(conn, left, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      {:error, conn}
+    else
+      options = [length: @chunk_bytes, read_length: @chunk_bytes, read_timeout: remaining]
+
+      case read_body(conn, options) do
+        {:ok, data, conn} when byte_size(data) <= left ->
+          {:ok, conn}
+
+        {:more, data, conn} when byte_size(data) <= left ->
+          drain_loop(conn, left - byte_size(data), deadline)
+
+        {_more, _data, conn} ->
+          {:error, conn}
+
+        :error ->
+          {:error, conn}
+      end
+    end
+  end
+
+  # Some servers (Bandit) raise on a read timeout or a closed connection rather
+  # than return an error.
+  defp read_body(conn, options) do
+    case Plug.Conn.read_body(conn, options) do
+      {:error, _reason} -> :error
+      result -> result
+    end
+  rescue
+    _exception -> :error
+  end
+
   defp write_result(:ok), do: :ok
   defp write_result({:error, posix}), do: {:error, {:file, posix}}
 end

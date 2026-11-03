@@ -330,17 +330,19 @@ defmodule GitServer.ReceivePackRequestTest do
   test "an oversized command section or pack is refused", ctx do
     opts = Keyword.put(ctx.opts, :max_command_bytes, 1000)
     ctx = %{ctx | opts: opts}
-    line = PktLine.encode("#{@zero} #{ctx.a} refs/heads/#{String.duplicate("x", 1000)}\n")
-    conn = post(ctx, IO.iodata_to_binary([line, PktLine.flush()]))
-    assert conn.status == 413
+    # Reported even when the first command alone is over the cap.
+    ref = "refs/heads/#{String.duplicate("x", 1000)}"
+
+    assert report(push(ctx, [{@zero, ctx.a, ref}], "")) ==
+             ["unpack too many ref commands (limit 1 KB)"]
 
     # Over the pack cap once stored, and over it while still arriving.
-    for {max_pack_bytes, size} <- [{2000, 2500}, {100_000, 300_000}] do
+    for {max_pack_bytes, size, limit} <- [{2000, 2500, "2 KB"}, {100_000, 300_000, "100 KB"}] do
       ctx = %{ctx | opts: Keyword.put(opts, :max_pack_bytes, max_pack_bytes)}
       pack = :crypto.strong_rand_bytes(size)
 
       assert report(push(ctx, [{@zero, ctx.a, "refs/heads/main"}], pack)) ==
-               ["unpack pack too large", "ng refs/heads/main unpacker error"]
+               ["unpack pack too large (limit #{limit})", "ng refs/heads/main unpacker error"]
     end
 
     assert Repository.read_state(ctx.store, @repo) == {:ok, State.new(), :absent}

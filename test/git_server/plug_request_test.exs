@@ -233,21 +233,28 @@ defmodule GitServer.PlugRequestTest do
     conn = call(gzip.(ls_refs_body(["unborn"])), opts)
     assert PktLine.decode(conn.resp_body) == {:ok, ["unborn HEAD\n", :flush]}
 
-    assert call(post("/repo/git-upload-pack", String.duplicate("0", 10_000_001)), opts).status ==
-             413
+    # Answered in-protocol, since git shows a POST's error status to no one.
+    error = fn conn, opts -> PktLine.decode(call(conn, opts).resp_body) end
+    too_large = {:ok, ["ERR request too large (limit 10 MB)\n"]}
 
-    assert call(gzip.(String.duplicate("0", 10_000_001)), opts).status == 413
+    assert error.(post("/repo/git-upload-pack", String.duplicate("0", 10_000_001)), opts) ==
+             too_large
+
+    assert error.(gzip.(String.duplicate("0", 10_000_001)), opts) == too_large
 
     small = GitServer.Plug.init(Keyword.put(opts, :max_request_bytes, 1000))
-    assert call(gzip.(String.duplicate("x", 1001)), small).status == 413
+
+    assert error.(gzip.(String.duplicate("x", 1001)), small) ==
+             {:ok, ["ERR request too large (limit 1 KB)\n"]}
+
     assert call(gzip.(String.duplicate("x", 1000)), small).status == 200
 
     truncated = binary_part(:zlib.gzip(ls_refs_body()), 0, 20)
     conn = post("/repo/git-upload-pack", truncated) |> put_req_header("content-encoding", "gzip")
-    assert call(conn, opts).status == 400
+    assert error.(conn, opts) == {:ok, ["ERR malformed gzip request body\n"]}
 
     conn = post("/repo/git-upload-pack", "x") |> put_req_header("content-encoding", "br")
-    assert call(conn, opts).status == 415
+    assert error.(conn, opts) == {:ok, ["ERR unsupported Content-Encoding\n"]}
   end
 
   test "the receive-pack advertisement lists refs, capabilities on the first only", %{opts: opts} do
