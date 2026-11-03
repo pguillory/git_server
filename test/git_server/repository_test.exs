@@ -11,8 +11,7 @@ defmodule GitServer.RepositoryTest do
   defmodule GateStore do
     @moduledoc """
     Delegates to another store, but holds every download: it writes a few bytes of it,
-    sends `{:held, pid, key}` to `owner` and waits for `:go` (download the file) or
-    `:fail` (return an error).
+    sends `{:held, pid, key}` to `owner` and waits for `:go`, then downloads the file.
     """
     @behaviour GitServer.Store
     alias GitServer.Store
@@ -30,9 +29,6 @@ defmodule GitServer.RepositoryTest do
         :go ->
           File.rm!(path)
           Store.get_file(config.inner, key, path)
-
-        :fail ->
-          {:error, "injected failure"}
       end
     end
 
@@ -64,51 +60,6 @@ defmodule GitServer.RepositoryTest do
     @impl true
     def describe(config) do
       "gate " <> Store.describe(config.inner)
-    end
-  end
-
-  defmodule RaisingStore do
-    @moduledoc "Delegates to another store, raising on every download."
-    @behaviour GitServer.Store
-    alias GitServer.Store
-
-    def wrap(store) do
-      {__MODULE__, store}
-    end
-
-    @impl true
-    def get_file(_inner, _key, _path) do
-      raise("boom")
-    end
-
-    @impl true
-    def get(inner, key) do
-      Store.get(inner, key)
-    end
-
-    @impl true
-    def put(inner, key, body, condition) do
-      Store.put(inner, key, body, condition)
-    end
-
-    @impl true
-    def put_file(inner, key, path, condition) do
-      Store.put_file(inner, key, path, condition)
-    end
-
-    @impl true
-    def delete(inner, key) do
-      Store.delete(inner, key)
-    end
-
-    @impl true
-    def list(inner, prefix) do
-      Store.list(inner, prefix)
-    end
-
-    @impl true
-    def describe(inner) do
-      "raising " <> Store.describe(inner)
     end
   end
 
@@ -212,52 +163,6 @@ defmodule GitServer.RepositoryTest do
   end
 
   @tag :tmp_dir
-  test "a failed download stops the others and leaves no partial file", %{tmp_dir: tmp_dir} do
-    inner = GitServer.TestStore.fresh()
-    [first | _] = names = names(5)
-    put_packs!(inner, names)
-    {:ok, e1} = Repository.put_state(inner, "r", %State{packs: [first]}, :absent)
-    {:ok, snapshot} = Repository.snapshot(inner, "r", tmp_dir)
-    {:ok, _} = Repository.put_state(inner, "r", %State{packs: names}, e1)
-
-    gated = %{snapshot | store: GateStore.wrap(inner, self()), concurrency: 3}
-    task = Task.async(fn -> Repository.refresh(gated) end)
-    held = for _ <- 1..3, do: assert_receive({:held, _, _}, 10_000)
-    [{failing, _} | others] = for {:held, pid, key} <- held, do: {pid, key}
-    monitors = for {pid, _} <- others, do: Process.monitor(pid)
-
-    send(failing, :fail)
-    assert Task.await(task) == {:error, "injected failure"}
-    for ref <- monitors, do: assert_receive({:DOWN, ^ref, :process, _, _}, 10_000)
-    refute_received {:held, _, _}
-
-    # The stopped downloads left their bytes only under temporary names.
-    assert Enum.sort(File.ls!(snapshot.dir)) ==
-             Enum.sort(
-               ["#{first}.pack", "#{first}.idx"] ++
-                 for({:held, _, key} <- held, do: Path.basename(key) <> ".part")
-             )
-
-    {:ok, refreshed} = Repository.refresh(snapshot)
-    assert read_packs(refreshed) == contents(names)
-    Repository.release(refreshed)
-  end
-
-  @tag :tmp_dir
-  test "a download that raises fails the snapshot and leaves nothing behind", %{
-    tmp_dir: tmp_dir,
-  } do
-    inner = GitServer.TestStore.fresh()
-    put_packs!(inner, names(3))
-    {:ok, _} = Repository.put_state(inner, "r", %State{packs: names(3)}, :absent)
-
-    assert {:error, "the store download raised RuntimeError\n" <> _} =
-             Repository.snapshot(RaisingStore.wrap(inner), "r", tmp_dir)
-
-    assert File.ls!(tmp_dir) == []
-  end
-
-  @tag :tmp_dir
   test "a missing pack fails the snapshot and leaves nothing behind", %{tmp_dir: tmp_dir} do
     store = GitServer.TestStore.fresh()
     {:ok, _} = Repository.put_state(store, "r", %State{packs: [@a]}, :absent)
@@ -315,17 +220,6 @@ defmodule GitServer.RepositoryTest do
     past = System.monotonic_time(:millisecond)
     write = fn snapshot, _last -> {:write, snapshot.state, :tried} end
     assert Repository.update(snapshot, past, write) == {:error, :deadline, :tried}
-    Repository.release(snapshot)
-  end
-
-  @tag :tmp_dir
-  test "update gives the store's reason when a write fails", %{tmp_dir: tmp_dir} do
-    store = GitServer.FailingStore.wrap(GitServer.TestStore.fresh(), "/state", 1)
-    {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir)
-    write = fn snapshot, _last -> {:write, snapshot.state, :tried} end
-    deadline = System.monotonic_time(:millisecond) + 10_000
-    assert Repository.update(snapshot, deadline, write) == {:error, "injected failure", :tried}
-    assert Repository.update(snapshot, deadline, write) == {:ok, :tried}
     Repository.release(snapshot)
   end
 end

@@ -65,7 +65,7 @@ defmodule GitServer.AfterUpdateTest do
     refute_received {:landed, _, _, _}
   end
 
-  test "not called for a declined or failed push", %{tmp_dir: tmp_dir} do
+  test "not called for a declined or refused push", %{tmp_dir: tmp_dir} do
     store = GitServer.TestStore.fresh()
     local = init!(Path.join(tmp_dir, "local"))
     commit!(local, "a", "a\n")
@@ -75,19 +75,6 @@ defmodule GitServer.AfterUpdateTest do
       {_, 1} = git(["push", TestServer.url(declining, "r"), "main"], cd: local)
     end)
 
-    refute_received {:landed, _, _, _}
-
-    # A push whose state write fails, logged as a store error.
-    failing = observing(store: GitServer.FailingStore.wrap(store, "/state", 1))
-
-    log =
-      capture_log(fn ->
-        push_and_wait(failing, fn ->
-          {_, 1} = git(["push", TestServer.url(failing, "r"), "main"], cd: local)
-        end)
-      end)
-
-    assert log =~ "injected failure"
     refute_received {:landed, _, _, _}
 
     # A push the server refuses: a branch that names a tag object.

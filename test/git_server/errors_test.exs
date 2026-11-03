@@ -5,7 +5,9 @@ defmodule GitServer.ErrorsTest do
   use ExUnit.Case, async: true
   import ExUnit.CaptureLog
   import GitServer.TestGit
-  alias GitServer.OutageStore
+  alias GitServer.RacingStore
+  alias GitServer.Repository
+  alias GitServer.Store
   alias GitServer.TestServer
 
   @moduletag :tmp_dir
@@ -96,29 +98,34 @@ defmodule GitServer.ErrorsTest do
     server = TestServer.start!()
     local = pushed!(server, tmp_dir)
     commit!(local, "b", "b\n")
-    everything = TestServer.start!(store: OutageStore.wrap(server.store, [:get], ~r/./, "down"))
-    packs = OutageStore.wrap(server.store, [:get_file, :put_file], ~r/packs/, "down")
-    packs = TestServer.start!(store: packs)
+
+    # A store whose credentials the bucket refuses fails every call.
+    {module, config} = server.store
+    refused = TestServer.start!(store: {module, %{config | secret_access_key: "wrong"}})
+    {:ok, %{packs: [pack]}, _etag} = Repository.read_state(server.store, "repo")
 
     log =
       capture_log(fn ->
         # The push's ref advertisement, git's first request.
-        {output, 128} = push(everything, local)
+        {output, 128} = push(refused, local)
         assert output =~ "remote: the server's storage failed; try again later\n"
         assert output =~ "The requested URL returned error: 500"
 
-        # ls-refs, then fetch.
-        {output, 128} = clone(everything, tmp_dir)
-        assert output =~ "fatal: remote error: the server's storage failed; try again later\n"
-        {output, 128} = clone(packs, tmp_dir)
+        # ls-refs.
+        {output, 128} = clone(refused, tmp_dir)
         assert output =~ "fatal: remote error: the server's storage failed; try again later\n"
 
-        # Downloading the repository's packs, or storing the new one.
-        {output, 1} = push(packs, local)
+        # A pack the state lists is gone from the bucket: the fetch, and the push's
+        # download of the repository's packs.
+        :ok = Store.delete(server.store, Repository.pack_key("repo", pack))
+        {output, 128} = clone(server, tmp_dir)
+        assert output =~ "fatal: remote error: the server's storage failed; try again later\n"
+        {output, 1} = push(server, local)
         assert output =~ " ! [remote rejected] main -> main (storage failed, try again later)\n"
       end)
 
-    assert log =~ ~s(store error: "down")
+    assert log =~ "store error: "
+    assert log =~ "pack #{pack} is missing"
     refute log =~ "error] ** "
   end
 
@@ -166,12 +173,12 @@ defmodule GitServer.ErrorsTest do
     # reading on and closes the connection, so what git shows varies; the push never
     # lands.
     tiny = TestServer.start!(store: server.store, max_pack_bytes: 1_000_000)
-    {:ok, before, etag} = GitServer.Repository.read_state(server.store, "repo")
+    {:ok, before, etag} = Repository.read_state(server.store, "repo")
 
     for args <- [["push"], ["-c", "http.postBuffer=100000000", "push"]] do
       {_output, status} = git(args ++ [TestServer.url(tiny, "repo"), "main"], cd: local)
       assert status != 0
-      assert GitServer.Repository.read_state(server.store, "repo") == {:ok, before, etag}
+      assert Repository.read_state(server.store, "repo") == {:ok, before, etag}
     end
   end
 
@@ -235,12 +242,14 @@ defmodule GitServer.ErrorsTest do
     assert output =~ "error: remote unpack failed: too many ref commands (limit 100 bytes)\n"
   end
 
-  test "a push that keeps losing the race", %{tmp_dir: tmp_dir} do
+  test "a push that loses the race at its deadline", %{tmp_dir: tmp_dir} do
     server = TestServer.start!()
     local = pushed!(server, tmp_dir)
     commit!(local, "b", "b\n")
-    losing = OutageStore.wrap(server.store, [:put], ~r{/state$}, :precondition_failed)
-    losing = TestServer.start!(store: losing, push_deadline_ms: 200)
+
+    # Another push lands just before this one's state write, with no time left to retry.
+    racing = RacingStore.wrap(server.store, fn -> {_, 0} = push(server, local, "main:other") end)
+    losing = TestServer.start!(store: racing, push_deadline_ms: 0)
 
     {output, 1} = push(losing, local)
 

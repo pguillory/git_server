@@ -257,12 +257,17 @@ defmodule GitServer.PlugRequestTest do
     assert error.(conn, opts) == {:ok, ["ERR unsupported Content-Encoding\n"]}
   end
 
-  test "the receive-pack advertisement lists refs, capabilities on the first only", %{opts: opts} do
-    store = opts[:store]
-    a = String.duplicate("a", 40)
-    b = String.duplicate("b", 40)
-    state = %GitServer.State{refs: %{"refs/tags/v1" => a, "refs/heads/main" => b}}
-    {:ok, _} = GitServer.Repository.put_state(store, "repo", state, :absent)
+  @tag :tmp_dir
+  test "the receive-pack advertisement lists refs, capabilities on the first only", %{
+    opts: opts,
+    tmp_dir: tmp_dir,
+  } do
+    source = GitServer.Seed.source!(tmp_dir)
+    a = GitServer.Seed.commit!(source, "f", "a\n")
+    GitServer.LocalGit.git!(source.home, source.repo, ["tag", "v1"])
+    b = GitServer.Seed.commit!(source, "f", "b\n")
+    GitServer.LocalGit.git!(source.home, source.repo, ["branch", "-M", "main"])
+    GitServer.Seed.push!(opts[:store], "repo", source)
 
     conn = GitServer.Plug.call(conn(:get, "/repo/info/refs?service=git-receive-pack"), opts)
 

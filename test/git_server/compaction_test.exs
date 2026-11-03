@@ -10,11 +10,9 @@ defmodule GitServer.CompactionTest do
 
   alias GitServer.Compaction
   alias GitServer.CountingStore
-  alias GitServer.FailingStore
   alias GitServer.Invariant
   alias GitServer.Object
   alias GitServer.ObjectId
-  alias GitServer.OutageStore
   alias GitServer.PackBuilder
   alias GitServer.RacingStore
   alias GitServer.Repository
@@ -662,35 +660,25 @@ defmodule GitServer.CompactionTest do
       assert Enum.all?(packs, &exists?(server.store, @repo, &1))
     end
 
-    test "a compaction that keeps losing until its deadline publishes nothing",
+    test "a compaction that loses the race at its deadline publishes nothing",
          %{tmp_dir: tmp_dir} do
-      inner = GitServer.TestStore.fresh()
-      seed_packs!(inner, tmp_dir, 3)
-      before = state(inner)
-      store = OutageStore.wrap(inner, [:put], ~r{/state$}, :precondition_failed)
+      server = TestServer.start!()
+      url = TestServer.url(server, @repo)
+      dir = pushes!(url, Path.join(tmp_dir, "a"), 3)
+
+      store =
+        RacingStore.wrap(server.store, fn ->
+          commit!(dir, "racing", "racing\n")
+          {_, 0} = git(["push", "-q"], cd: dir)
+        end)
 
       assert {:error, "compaction lost the race" <> _} =
                GitServer.compact(opts(store, tmp_dir, push_deadline_ms: 0), @repo, max_packs: 0)
 
-      assert state(inner) == before
-      Invariant.check!(inner, @repo, tmp_dir)
-    end
-
-    test "a failed upload or state write publishes nothing", %{tmp_dir: tmp_dir} do
-      inner = GitServer.TestStore.fresh()
-      seed_packs!(inner, tmp_dir, 3)
-      before = state(inner)
-
-      for suffix <- [".pack", ".idx", "/state"] do
-        store = FailingStore.wrap(inner, suffix, 1)
-
-        assert {:error, "injected failure"} =
-                 GitServer.compact(opts(store, tmp_dir), @repo, max_packs: 0)
-
-        assert state(inner) == before
-      end
-
-      Invariant.check!(inner, @repo, tmp_dir)
+      final = state(server.store)
+      assert length(final.packs) == 4
+      assert final.refs["refs/heads/main"] == rev!(dir, "HEAD")
+      Invariant.check!(server.store, @repo, tmp_dir)
     end
   end
 

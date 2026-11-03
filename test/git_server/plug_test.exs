@@ -1,12 +1,7 @@
 defmodule GitServer.PlugTest do
   use ExUnit.Case, async: true
   import GitServer.TestGit
-  alias GitServer.Repository
-  alias GitServer.State
   alias GitServer.TestServer
-
-  @commit "1111111111111111111111111111111111111111"
-  @tag_id "2222222222222222222222222222222222222222"
 
   test "ls-remote of an empty repository" do
     server = TestServer.start!()
@@ -24,26 +19,31 @@ defmodule GitServer.PlugTest do
              {"refs/heads/main\n", 0}
   end
 
-  test "ls-remote lists refs with HEAD as a symref" do
+  @tag :tmp_dir
+  test "ls-remote lists refs with HEAD as a symref", %{tmp_dir: tmp_dir} do
     server = TestServer.start!()
-
-    state = %State{
-      head: "refs/heads/main",
-      refs: %{"refs/heads/main" => @commit, "refs/tags/v1" => @tag_id},
-    }
-
-    {:ok, _} = Repository.put_state(server.store, "alice/notes", state, :absent)
+    {_, 0} = git(["init", "-q", "-b", "main", tmp_dir])
+    {_, 0} = git(["commit", "-q", "--allow-empty", "-m", "one"], cd: tmp_dir)
+    {_, 0} = git(["tag", "v1"], cd: tmp_dir)
+    {_, 0} = git(["commit", "-q", "--allow-empty", "-m", "two"], cd: tmp_dir)
+    {_, 0} = git(["push", "-q", TestServer.url(server, "alice/notes"), "main", "v1"], cd: tmp_dir)
+    [commit, tag] = for rev <- ["main", "v1"], do: rev_parse!(tmp_dir, rev)
 
     assert git(["ls-remote", "--symref", TestServer.url(server, "alice/notes.git")]) ==
              {"""
               ref: refs/heads/main\tHEAD
-              #{@commit}\tHEAD
-              #{@commit}\trefs/heads/main
-              #{@tag_id}\trefs/tags/v1
+              #{commit}\tHEAD
+              #{commit}\trefs/heads/main
+              #{tag}\trefs/tags/v1
               """, 0}
 
     assert git(["ls-remote", "--heads", TestServer.url(server, "alice/notes")]) ==
-             {"#{@commit}\trefs/heads/main\n", 0}
+             {"#{commit}\trefs/heads/main\n", 0}
+  end
+
+  defp rev_parse!(dir, rev) do
+    {id, 0} = git(["rev-parse", rev], cd: dir)
+    String.trim(id)
   end
 
   test "a wrong password is refused with a 401" do
