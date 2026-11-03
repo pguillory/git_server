@@ -163,6 +163,31 @@ defmodule GitServer.UploadPackTest do
       assert git(["ls-remote", "--heads", url]) == {"#{commit}\trefs/heads/main\n", 0}
     end
 
+    test "ls-refs leaves a tag chain longer than the bound unpeeled", %{tmp_dir: tmp_dir} do
+      source = Seed.source!(tmp_dir)
+      commit = Seed.commit!(source, "file", "one\n")
+      max = GitServer.Object.max_peel()
+
+      # t1 tags the commit, and each tag after it the one before.
+      for n <- 1..(max + 1) do
+        target = if n == 1, do: "HEAD", else: "t#{n - 1}"
+
+        {_, 0} =
+          git(["-c", "advice.nestedTag=false", "tag", "-a", "t#{n}", "-m", "t#{n}", target],
+            cd: source.repo
+          )
+      end
+
+      server = TestServer.start!()
+      Seed.push!(server.store, "repo", source)
+      url = TestServer.url(server, "repo")
+
+      {output, 0} = git(["ls-remote", url, "refs/tags/t#{max}*"])
+      assert output =~ "#{commit}\trefs/tags/t#{max}^{}\n"
+      {output, 0} = git(["ls-remote", url, "refs/tags/t#{max + 1}*"])
+      assert output == "#{Seed.rev_parse!(source, "t#{max + 1}")}\trefs/tags/t#{max + 1}\n"
+    end
+
     test "a request too big for one POST, probed first", %{tmp_dir: tmp_dir} do
       source = Seed.source!(tmp_dir)
       Seed.commit!(source, "file", "one\n")

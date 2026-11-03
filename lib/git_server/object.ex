@@ -79,6 +79,13 @@ defmodule GitServer.Object do
   def parse_links(:tree, content, max), do: tree_links(content, [], 0, max)
 
   @doc """
+  The most steps a peel follows from a ref: tags (which may point at tags), then a
+  commit, then its tree. Far more than anyone writes, and a bound on a chain built
+  to be long.
+  """
+  def max_peel, do: 12
+
+  @doc """
   A tree's entries in order, each `{kind, name, id}`: `kind` is `:tree`, `:file`,
   `:executable`, `:symlink` or `:submodule`, read from the entry's mode the way git
   reads it. Returns `{:error, "malformed tree"}` when the content isn't a tree.

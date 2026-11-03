@@ -15,7 +15,7 @@ defmodule GitServer.UploadPack do
   """
 
   import Plug.Conn, only: [chunk: 2]
-  alias GitServer.{HTTP, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
+  alias GitServer.{HTTP, Object, ObjectDB, ObjectId, ObjectWalk, PktLine, Repository}
   alias GitServer.Pack.Writer
 
   @service "git-upload-pack"
@@ -169,16 +169,19 @@ defmodule GitServer.UploadPack do
   defp peeled(db, hex) do
     with {:ok, id} <- ObjectId.from_hex(hex),
          {:ok, :tag, _size} <- ObjectDB.lookup(db, id) do
-      follow_tag(db, id)
+      follow_tag(db, id, Object.max_peel())
     else
       _ -> nil
     end
   end
 
-  defp follow_tag(db, id) do
+  # A chain longer than the bound goes without, like an unreadable tag.
+  defp follow_tag(_db, _id, 0), do: nil
+
+  defp follow_tag(db, id, n) do
     with {:ok, :tag, content} <- ObjectDB.read(db, id),
          {:ok, [{type, target}]} <- ObjectDB.parse_links(:tag, content) do
-      if type == :tag, do: follow_tag(db, target), else: ObjectId.to_hex(target)
+      if type == :tag, do: follow_tag(db, target, n - 1), else: ObjectId.to_hex(target)
     else
       _ -> nil
     end

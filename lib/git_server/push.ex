@@ -31,10 +31,6 @@ defmodule GitServer.Push do
         }
   @type file_type :: :file | :executable | :symlink | :submodule
 
-  # Steps from an id to its tree: tags (which may point at tags), then a commit,
-  # then the tree. Far more than anyone writes.
-  @max_peel 12
-
   defimpl Inspect do
     def inspect(push, opts) do
       fields = [repo: push.repo, refs: push.refs, updates: push.updates]
@@ -180,7 +176,7 @@ defmodule GitServer.Push do
   # The tree a commit, tag or tree id stands for.
   defp root_tree(db, hex) do
     case ObjectId.from_hex(hex) do
-      {:ok, id} -> peel(db, id, @max_peel)
+      {:ok, id} -> peel(db, id, Object.max_peel())
       :error -> {:error, "not an object id"}
     end
   end
