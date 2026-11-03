@@ -18,8 +18,8 @@ defmodule GitServer.ObjectDB do
       object read raises the cap by twice `max_delta_depth` times its size, so a chain
       read in full, whose re-resolution grows with its depth and the bytes it
       yields, stays within it, while bases resolved again and again for little
-      output don't. Past it, reads fail with `"too much work resolving delta bases"` (default
-      unlimited)
+      output don't. Past it, reads fail with
+      `"too much work resolving delta bases"` (default unlimited)
     * `:log_label` - when given, such as `"repository alice/notes"`, the first error
       opening or reading a pack is also logged at error level with this label, the
       pack's file name and the reason, never object content (default none). Later

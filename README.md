@@ -106,9 +106,10 @@ bodies unread.
 - `:max_delta_depth`: the longest delta chain, in a push or a stored pack. Default 100.
 - `:max_fetch_work_bytes`: how much work one fetch may spend resolving the delta bases
   under the objects it reads, in bytes inflated and produced, beyond an allowance of
-  twice `:max_delta_depth` times the bytes it reads. The objects themselves never count. So a
-  history of large files changed many times stays within it, while a pack built to make
-  a fetch resolve the same long chains again and again for little output doesn't. Default 1 GB.
+  twice `:max_delta_depth` times the bytes it reads. The objects themselves never
+  count. So a history of large files changed many times stays within it, while a pack
+  built to make a fetch resolve the same long chains again and again for little output
+  doesn't. Default 1 GB.
 - `:max_request_bytes`: the largest upload-pack request body, raw and inflated. Default
   10 MB.
 - `:max_command_bytes`: the largest command section of a push. Default 1 MB.
