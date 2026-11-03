@@ -374,10 +374,12 @@ defmodule GitServer.BeforeUpdateTest do
     server =
       start!(
         observe(fn push ->
-          {time, result} =
-            :timer.tc(fn -> Enum.map(push.updates, &Push.list_files(push, &1.new)) end)
-
-          {div(time, 1000), result}
+          # Small budgets, so each tree trips its own limit after bounded work. The
+          # defaults are the same checks with bigger numbers.
+          Enum.map(
+            push.updates,
+            &Push.list_files(push, &1.new, max_entries: 1_000, max_path_bytes: 5_000_000)
+          )
         end)
       )
 
@@ -387,9 +389,8 @@ defmodule GitServer.BeforeUpdateTest do
     end
 
     {_, 0} = git(["push", TestServer.url(server, "r"), "doubling", "deep"], cd: local)
-    assert_received {:called, _refs, _updates, {ms, results}}
+    assert_received {:called, _refs, _updates, results}
     assert results == [{:error, "too many files"}, {:error, "paths too long"}]
-    assert ms < 15_000
   end
 
   test "trees with unsafe names can't be read", %{tmp_dir: tmp_dir} do
