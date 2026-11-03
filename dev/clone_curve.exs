@@ -369,8 +369,11 @@ defmodule CloneCurve do
   defp measure_clones(run, target) do
     head = run |> git!(["rev-parse", "HEAD"], run.local) |> String.trim()
 
-    if run.pack_cache == "warm",
-      do: git!(run, ["clone", "-q", run.url, Path.join(run.work, "warm-#{target}")], run.work)
+    # Measured again after compaction, so each warming clone gets a directory of its own.
+    if run.pack_cache == "warm" do
+      warm = Path.join(run.work, "warm-#{target}-#{System.unique_integer([:positive])}")
+      git!(run, ["clone", "-q", run.url, warm], run.work)
+    end
 
     for n <- 1..run.clones do
       dir = Path.join(run.work, "clone-#{target}-#{n}")
