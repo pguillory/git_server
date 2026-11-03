@@ -81,8 +81,15 @@ defmodule GitServer.Config do
     ]
   end
 
-  @doc "The limits for reading stored packs (`GitServer.ObjectDB`)."
-  def read_limits(%__MODULE__{} = config) do
-    [max_object_bytes: config.max_object_bytes, max_delta_depth: config.max_delta_depth]
+  @doc """
+  The options for reading a repository's stored packs (`GitServer.ObjectDB`): the
+  limits, and a log label naming the repository.
+  """
+  def read_options(%__MODULE__{} = config, repo) do
+    [
+      max_object_bytes: config.max_object_bytes,
+      max_delta_depth: config.max_delta_depth,
+      log_label: "repository #{repo}",
+    ]
   end
 end

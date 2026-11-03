@@ -178,7 +178,7 @@ defmodule GitServer.ReceivePack.Update do
   # In the worker. Only the kind of a failure is reported, never an exception's
   # message or a returned value, which may quote pushed content.
   defp call_before_update(config, packs, fields) do
-    case ObjectDB.open(packs, Config.read_limits(config)) do
+    case ObjectDB.open(packs, Config.read_options(config, fields.repo)) do
       {:ok, db} ->
         try do
           case config.before_update.(struct!(GitServer.Push, Map.put(fields, :db, db))) do
@@ -204,7 +204,7 @@ defmodule GitServer.ReceivePack.Update do
 
   # The repository's objects, open in this process for the length of `fun`.
   defp with_db(snapshot, config, fun) do
-    case ObjectDB.open(snapshot.packs, Config.read_limits(config)) do
+    case ObjectDB.open(snapshot.packs, Config.read_options(config, snapshot.repo)) do
       {:ok, db} ->
         try do
           fun.(db)

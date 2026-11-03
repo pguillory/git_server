@@ -119,10 +119,15 @@ defmodule GitServer.ReceivePackTest do
     # A stored pack is read whatever its object count, but not past the delta depth.
     {_, 0} = git(["clone", "-q", TestServer.url(few_objects, "big"), Path.join(tmp_dir, "a")])
 
-    {output, 128} =
-      git(["clone", "-q", TestServer.url(no_deltas, "big"), Path.join(tmp_dir, "b")])
+    log =
+      capture_log(fn ->
+        {output, 128} =
+          git(["clone", "-q", TestServer.url(no_deltas, "big"), Path.join(tmp_dir, "b")])
 
-    assert output =~ "delta chain too deep"
+        assert output =~ "delta chain too deep"
+      end)
+
+    assert log =~ ~r/repository big: pack [0-9a-f]{40}\.pack: delta chain too deep/
   end
 
   test "tags, an annotated tag and a branch delete", %{tmp_dir: tmp_dir} do

@@ -12,16 +12,26 @@ defmodule GitServer.ObjectDB do
     * `:max_object_bytes` - the largest object (or delta) to inflate (default 50 MB)
     * `:max_delta_depth` - the longest delta chain to follow (default 100)
     * `:cache_bytes` - the size of the resolved-base cache (default 32 MB)
+    * `:log_label` - when given, such as `"repository alice/notes"`, every error
+      opening or reading a pack is also logged at error level with this label, the
+      pack's file name and the reason, never object content (default none)
   """
+
+  require Logger
 
   alias GitServer.{Object, ObjectId, Pack}
   alias GitServer.Pack.{Cache, Idx, Reader}
 
-  defstruct [:packs, :cache]
+  defstruct [:packs, :cache, :names, :log_label]
 
   @type t :: %__MODULE__{}
 
-  @defaults [max_object_bytes: 50_000_000, max_delta_depth: 100, cache_bytes: 32_000_000]
+  @defaults [
+    max_object_bytes: 50_000_000,
+    max_delta_depth: 100,
+    cache_bytes: 32_000_000,
+    log_label: nil,
+  ]
 
   @doc "The default limits."
   def defaults, do: @defaults
@@ -41,14 +51,26 @@ defmodule GitServer.ObjectDB do
       |> Enum.with_index()
       |> Enum.reduce_while({:ok, []}, fn {{pack_path, idx_path}, key}, {:ok, acc} ->
         case open_pack(pack_path, idx_path, key, cache, opts) do
-          {:ok, pack} -> {:cont, {:ok, [pack | acc]}}
-          {:error, reason} -> {:halt, {:error, reason, acc}}
+          {:ok, pack} ->
+            {:cont, {:ok, [pack | acc]}}
+
+          {:error, reason} ->
+            log(opts[:log_label], pack_path, reason)
+            {:halt, {:error, reason, acc}}
         end
       end)
 
     case result do
       {:ok, acc} ->
-        {:ok, %__MODULE__{packs: Enum.reverse(acc), cache: cache}}
+        names = Enum.map(packs, fn {pack_path, _idx_path} -> pack_path end)
+
+        {:ok,
+         %__MODULE__{
+           packs: Enum.reverse(acc),
+           cache: cache,
+           names: List.to_tuple(names),
+           log_label: opts[:log_label],
+         }}
 
       {:error, reason, acc} ->
         Enum.each(acc, fn {_idx, reader} -> File.close(reader.fd) end)
@@ -168,13 +190,26 @@ defmodule GitServer.ObjectDB do
   @doc "See `GitServer.Object.parse_links/2`."
   defdelegate parse_links(type, content), to: Object
 
-  defp with_pack(%__MODULE__{packs: packs}, id, fun) do
+  defp with_pack(%__MODULE__{packs: packs} = db, id, fun) do
     Enum.find_value(packs, :error, fn {idx, reader} ->
       case Idx.offset(idx, id) do
-        {:ok, offset} -> run(fn -> fun.(reader, offset) end)
-        :error -> nil
+        {:ok, offset} ->
+          with {:error, reason} <- run(fn -> fun.(reader, offset) end) do
+            log(db.log_label, elem(db.names, reader.key), reason)
+            {:error, reason}
+          end
+
+        :error ->
+          nil
       end
     end)
+  end
+
+  # The reason is one of this module's own messages, which never quote content.
+  defp log(nil, _pack_path, _reason), do: :ok
+
+  defp log(label, pack_path, reason) do
+    Logger.error("git_server: #{label}: pack #{Path.basename(pack_path)}: #{reason}")
   end
 
   defp run(fun) do

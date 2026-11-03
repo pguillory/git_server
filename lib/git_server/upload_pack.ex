@@ -340,7 +340,7 @@ defmodule GitServer.UploadPack do
   defp with_objects(conn, config, repo, fun) do
     result =
       Repository.with_snapshot(config.store, repo, config.temp_dir, fn snapshot ->
-        with {:ok, db} <- ObjectDB.open(snapshot.packs, Config.read_limits(config)) do
+        with {:ok, db} <- ObjectDB.open(snapshot.packs, Config.read_options(config, repo)) do
           try do
             fun.(snapshot, db)
           after

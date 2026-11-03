@@ -2,6 +2,7 @@ defmodule GitServer.UploadPackTest do
   # Repositories seeded in the store with packs real git wrote, read with the real git
   # client. Requests that client never sends go through Plug.Test.
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
   import GitServer.TestGit
   import Plug.Conn, only: [put_req_header: 3]
   alias GitServer.{GitFixture, ObjectId, PktLine, Repository, Seed, Store, TestServer}
@@ -186,6 +187,37 @@ defmodule GitServer.UploadPackTest do
       assert output =~ "#{commit}\trefs/tags/t#{max}^{}\n"
       {output, 0} = git(["ls-remote", url, "refs/tags/t#{max + 1}*"])
       assert output == "#{Seed.rev_parse!(source, "t#{max + 1}")}\trefs/tags/t#{max + 1}\n"
+    end
+
+    test "a pack index that doesn't match its pack fails a fetch and a push, logged",
+         %{tmp_dir: tmp_dir} do
+      source = Seed.source!(Path.join(tmp_dir, "a"))
+      Seed.commit!(source, "file", "one\n")
+      other = Seed.source!(Path.join(tmp_dir, "b"))
+      Seed.commit!(other, "file", "two\n")
+      server = TestServer.start!()
+      pack = Seed.push!(server.store, "repo", source)
+      other_pack = Seed.push!(server.store, "other", other)
+      {:ok, idx, _etag} = Store.get(server.store, Repository.idx_key("other", other_pack))
+      {:ok, _} = Store.put(server.store, Repository.idx_key("repo", pack), idx, :none)
+      url = TestServer.url(server, "repo")
+
+      log =
+        capture_log(fn ->
+          {output, 128} = git(["clone", "-q", url, Path.join(tmp_dir, "clone")])
+          assert output =~ "500"
+        end)
+
+      assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
+
+      log =
+        capture_log(fn ->
+          Seed.commit!(source, "file", "three\n")
+          {output, 1} = git(["push", url, "main"], cd: source.repo)
+          assert output =~ "storage error"
+        end)
+
+      assert log =~ "repository repo: pack #{pack}.pack: pack index doesn't match pack"
     end
 
     test "a request too big for one POST, probed first", %{tmp_dir: tmp_dir} do
@@ -374,9 +406,17 @@ defmodule GitServer.UploadPackTest do
       Seed.push!(store, "big", source)
 
       opts = [max_object_bytes: 1000] ++ opts
-      assert ["packfile\n" | rest] = fetch(opts, ["want #{big}", "done"], "big")
-      assert List.last(rest) == :flush
-      assert [<<3, "git_server: object too large\n">>] = for(<<3, _::binary>> = p <- rest, do: p)
+
+      log =
+        capture_log(fn ->
+          assert ["packfile\n" | rest] = fetch(opts, ["want #{big}", "done"], "big")
+          assert List.last(rest) == :flush
+
+          assert [<<3, "git_server: object too large\n">>] =
+                   for(<<3, _::binary>> = p <- rest, do: p)
+        end)
+
+      assert log =~ ~r/repository big: pack [0-9a-f]{40}\.pack: object too large/
       assert File.ls!(context.temp_dir) == []
     end
 
