@@ -79,11 +79,13 @@ defmodule GitServer.Pack.Merge do
 
     try do
       w = %{out: out, pos: 0, hash: ObjectId.hash_init(), max: max_bytes, input: 0}
-      w = emit(w, Pack.encode_header(map_size(kept)))
-      w = Enum.reduce(packs, w, &copy_pack(db, kept, &1, &2))
-      checksum = ObjectId.hash_final(w.hash)
-      :ok = write!(out, checksum)
-      {:ok, checksum, MapSet.new(Map.keys(kept))}
+
+      with {:ok, w} <- emit(w, Pack.encode_header(map_size(kept))),
+           {:ok, w} <- copy_packs(db, kept, packs, w) do
+        checksum = ObjectId.hash_final(w.hash)
+        :ok = write!(out, checksum)
+        {:ok, checksum, MapSet.new(Map.keys(kept))}
+      end
     after
       # A delayed write's error comes back from the close.
       case :file.close(out) do
@@ -95,8 +97,8 @@ defmodule GitServer.Pack.Merge do
       end
     end
   catch
+    # Pack.Reader's abort of a read or write deep in the merge.
     {:pack_error, reason} -> {:error, reason}
-    {:too_large, input} -> {:error, {:too_large, input}}
   end
 
   # Each entry's offset, end and id, in pack order.
@@ -125,27 +127,45 @@ defmodule GitServer.Pack.Merge do
     %{n: n, path: pack_path, entries: entries, ids: Map.new(entries, &{elem(&1, 0), elem(&1, 2)})}
   end
 
-  # `moved` maps each of this input's kept offsets to its offset in the output.
+  # Each step returns `{:ok, w}`, or `{:error, {:too_large, input}}` once the output
+  # would pass `max_bytes`.
+  defp copy_packs(db, kept, packs, w) do
+    Enum.reduce_while(packs, {:ok, w}, fn pack, {:ok, w} ->
+      case copy_pack(db, kept, pack, w) do
+        {:ok, w} -> {:cont, {:ok, w}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   defp copy_pack(db, kept, pack, w) do
     case :file.open(pack.path, [:read, :raw, :binary]) do
       {:ok, fd} ->
         try do
-          pack.entries
-          |> Enum.reduce({%{w | input: pack.n}, %{}}, fn {offset, stop, id}, {w, moved} ->
-            if kept[id] == {pack.n, offset} do
-              entry = %{offset: offset, stop: stop, id: id}
-              {copy_entry(db, kept, pack, fd, moved, entry, w), Map.put(moved, offset, w.pos)}
-            else
-              {w, moved}
-            end
-          end)
-          |> elem(0)
+          copy_entries(db, kept, pack, fd, pack.entries, %{}, %{w | input: pack.n})
         after
           File.close(fd)
         end
 
       {:error, posix} ->
         Reader.fail("cannot open pack: #{:file.format_error(posix)}")
+    end
+  end
+
+  # `moved` maps each of this input's kept offsets to its offset in the output.
+  defp copy_entries(_db, _kept, _pack, _fd, [], _moved, w) do
+    {:ok, w}
+  end
+
+  defp copy_entries(db, kept, pack, fd, [{offset, stop, id} | rest], moved, w) do
+    if kept[id] == {pack.n, offset} do
+      entry = %{offset: offset, stop: stop, id: id}
+
+      with {:ok, next} <- copy_entry(db, kept, pack, fd, moved, entry, w) do
+        copy_entries(db, kept, pack, fd, rest, Map.put(moved, offset, w.pos), next)
+      end
+    else
+      copy_entries(db, kept, pack, fd, rest, moved, w)
     end
   end
 
@@ -175,8 +195,10 @@ defmodule GitServer.Pack.Merge do
         if kept[base] == {pack.n, base_offset} do
           # Kept and earlier in this input, so already written, before this entry.
           base_pos = Map.get(moved, base_offset) || Reader.fail("bad delta base offset")
-          w = emit(w, Pack.encode_ofs_delta_header(size, w.pos - base_pos))
-          copy(w, fd, offset + used, stop)
+
+          with {:ok, w} <- emit(w, Pack.encode_ofs_delta_header(size, w.pos - base_pos)) do
+            copy(w, fd, offset + used, stop)
+          end
         else
           whole(w, db, id)
         end
@@ -184,12 +206,15 @@ defmodule GitServer.Pack.Merge do
   end
 
   defp copy(w, _fd, pos, stop) when pos >= stop do
-    w
+    {:ok, w}
   end
 
   defp copy(w, fd, pos, stop) do
     bytes = Reader.pread(fd, pos, min(@chunk, stop - pos))
-    copy(emit(w, bytes), fd, pos + byte_size(bytes), stop)
+
+    with {:ok, w} <- emit(w, bytes) do
+      copy(w, fd, pos + byte_size(bytes), stop)
+    end
   end
 
   defp whole(w, db, id) do
@@ -207,9 +232,13 @@ defmodule GitServer.Pack.Merge do
 
   defp emit(w, iodata) do
     pos = w.pos + IO.iodata_length(iodata)
-    if w.max && pos + Pack.trailer_size() > w.max, do: throw({:too_large, w.input})
-    :ok = write!(w.out, iodata)
-    %{w | pos: pos, hash: ObjectId.hash_update(w.hash, iodata)}
+
+    if w.max && pos + Pack.trailer_size() > w.max do
+      {:error, {:too_large, w.input}}
+    else
+      :ok = write!(w.out, iodata)
+      {:ok, %{w | pos: pos, hash: ObjectId.hash_update(w.hash, iodata)}}
+    end
   end
 
   defp write!(out, iodata) do

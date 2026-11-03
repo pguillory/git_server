@@ -2,7 +2,7 @@ defmodule GitServer.Pack.Writer do
   @moduledoc """
   Writes a pack of whole objects (no deltas), streamed out in pieces.
 
-  Each piece of the pack goes to `emit.(iodata, acc)`, which returns the new `acc`:
+  Each piece of the pack goes to `emit.(iodata, acc)`, which returns `{:ok, acc}`:
   the header first, then one piece per object (its header and zlib stream), then the
   trailer checksum. A pack without deltas is valid and every git client accepts it.
   """
@@ -12,39 +12,46 @@ defmodule GitServer.Pack.Writer do
   alias GitServer.Pack
 
   @doc """
-  Writes the objects `ids`, read from `db`, in order. Returns `{:ok, checksum, acc}`,
-  or `{:error, reason, acc}` if an object can't be read, in which case the pack
-  emitted so far is incomplete and the caller must report the failure instead.
+  Writes the objects `ids`, read from `db`, in order. `emit.(iodata, acc)` returns
+  `{:ok, acc}`, or `{:error, reason, acc}` to stop. Returns `{:ok, checksum, acc}`, or
+  `{:error, reason, acc}` if `emit` stopped or an object can't be read, in which case
+  the pack emitted so far is incomplete and the caller must report the failure instead.
   """
-  @spec write(ObjectDB.t(), [ObjectId.t()], acc, (iodata, acc -> acc)) ::
-          {:ok, ObjectId.t(), acc} | {:error, String.t(), acc}
-        when acc: term
+  @spec write(ObjectDB.t(), [ObjectId.t()], acc, (iodata, acc -> {:ok, acc} | error)) ::
+          {:ok, ObjectId.t(), acc} | error
+        when acc: term, error: {:error, term, acc}
   def write(db, ids, acc, emit) do
     header = Pack.encode_header(length(ids))
-    state = {ObjectId.hash_update(ObjectId.hash_init(), header), emit.(header, acc)}
 
-    result =
-      Enum.reduce_while(ids, {:ok, state}, fn id, {:ok, {hash, acc}} ->
-        case ObjectDB.read(db, id) do
-          {:ok, type, content} ->
-            piece = [Pack.encode_object_header(type, byte_size(content)), :zlib.compress(content)]
-            {:cont, {:ok, {ObjectId.hash_update(hash, piece), emit.(piece, acc)}}}
+    with {:ok, acc} <- emit.(header, acc),
+         {:ok, hash, acc} <-
+           write_objects(db, ids, ObjectId.hash_update(ObjectId.hash_init(), header), acc, emit) do
+      checksum = ObjectId.hash_final(hash)
 
-          :error ->
-            {:halt, {:error, "missing object #{ObjectId.to_hex(id)}", acc}}
+      with {:ok, acc} <- emit.(checksum, acc) do
+        {:ok, checksum, acc}
+      end
+    end
+  end
 
-          {:error, reason} ->
-            {:halt, {:error, reason, acc}}
+  defp write_objects(_db, [], hash, acc, _emit) do
+    {:ok, hash, acc}
+  end
+
+  defp write_objects(db, [id | ids], hash, acc, emit) do
+    case ObjectDB.read(db, id) do
+      {:ok, type, content} ->
+        piece = [Pack.encode_object_header(type, byte_size(content)), :zlib.compress(content)]
+
+        with {:ok, acc} <- emit.(piece, acc) do
+          write_objects(db, ids, ObjectId.hash_update(hash, piece), acc, emit)
         end
-      end)
 
-    case result do
-      {:ok, {hash, acc}} ->
-        checksum = ObjectId.hash_final(hash)
-        {:ok, checksum, emit.(checksum, acc)}
+      :error ->
+        {:error, "missing object #{ObjectId.to_hex(id)}", acc}
 
-      error ->
-        error
+      {:error, reason} ->
+        {:error, reason, acc}
     end
   end
 end

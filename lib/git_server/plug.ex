@@ -154,9 +154,10 @@ defmodule GitServer.Plug do
     end
   end
 
-  # The request holds the password and the Authorization header, so a failure is
-  # caught here and logged by kind only; uncaught, the HTTP server's crash report
-  # would print the call's arguments.
+  # The host's function, outside this library: a failure is caught and refused with a
+  # 500. The request holds the password and the Authorization header, so it is
+  # logged by kind only; uncaught, the HTTP server's crash report would print the
+  # call's arguments.
   defp call_authorize(authorize, request) do
     case authorize.(request) do
       result when result in [:ok, :unauthorized, :forbidden] -> result

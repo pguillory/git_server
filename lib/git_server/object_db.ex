@@ -195,8 +195,10 @@ defmodule GitServer.ObjectDB do
           {:ok, Object.type(), non_neg_integer} | :error | {:error, String.t()}
   def lookup(%__MODULE__{} = db, id) do
     with_pack(db, id, fn reader, offset ->
-      {type, size} = Reader.type_and_size(reader, offset)
-      {:ok, type, size}
+      case Reader.type_and_size(reader, offset) do
+        {:missing_base, _id} -> missing_base()
+        {type, size} -> {:ok, type, size}
+      end
     end)
   end
 
@@ -207,11 +209,16 @@ defmodule GitServer.ObjectDB do
   @spec read(t, ObjectId.t()) :: {:ok, Object.type(), binary} | :error | {:error, String.t()}
   def read(%__MODULE__{} = db, id) do
     with_pack(db, id, fn reader, offset ->
-      {type, content} = Reader.read(reader, offset)
-      # A chain step costs its delta's inflating and its result, about twice the
-      # object's size when a file's versions are alike.
-      Reader.settle(reader.base_budget, 2 * reader.max_delta_depth * byte_size(content))
-      {:ok, type, content}
+      case Reader.read(reader, offset) do
+        {:missing_base, _id} ->
+          missing_base()
+
+        {type, content} ->
+          # A chain step costs its delta's inflating and its result, about twice the
+          # object's size when a file's versions are alike.
+          Reader.settle(reader.base_budget, 2 * reader.max_delta_depth * byte_size(content))
+          {:ok, type, content}
+      end
     end)
   end
 
@@ -258,11 +265,15 @@ defmodule GitServer.ObjectDB do
     Logger.error("git_server: #{label}: pack #{Path.basename(pack_path)}: #{reason}")
   end
 
+  # A stored pack holds every delta base itself.
+  defp missing_base do
+    {:error, "missing delta base"}
+  end
+
   defp run(fun) do
     fun.()
   catch
+    # Pack.Reader's abort of a read of corrupt or oversized pack data.
     {:pack_error, reason} -> {:error, reason}
-    # A stored pack holds every delta base itself.
-    {:missing_base, _id} -> {:error, "missing delta base"}
   end
 end

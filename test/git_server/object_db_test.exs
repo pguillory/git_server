@@ -265,7 +265,7 @@ defmodule GitServer.ObjectDBTest do
   } do
     {:ok, db} = ObjectDB.open([f.packs.ofs])
     ids = for {hex, _, _} <- objects, do: elem(ObjectId.from_hex(hex), 1)
-    {:ok, checksum, pieces} = Writer.write(db, ids, [], fn piece, acc -> [acc | piece] end)
+    {:ok, checksum, pieces} = Writer.write(db, ids, [], fn piece, acc -> {:ok, [acc | piece]} end)
     pack = IO.iodata_to_binary(pieces)
     assert binary_part(pack, byte_size(pack) - 20, 20) == checksum
     assert ObjectId.hash(binary_part(pack, 0, byte_size(pack) - 20)) == checksum
@@ -286,7 +286,7 @@ defmodule GitServer.ObjectDBTest do
     missing = ObjectId.zero()
 
     assert {:error, "missing object " <> _, _acc} =
-             Writer.write(db, [missing], [], fn piece, acc -> [acc | piece] end)
+             Writer.write(db, [missing], [], fn piece, acc -> {:ok, [acc | piece]} end)
   end
 
   defp rev_parse(f, rev) do

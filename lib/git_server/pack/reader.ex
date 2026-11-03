@@ -13,8 +13,11 @@ defmodule GitServer.Pack.Reader do
   them and applying their deltas, which a cache hit would have saved; the caller
   credits it for what it reads and checks it with `settle/2`. Either may be nil.
 
-  Errors are thrown as `{:pack_error, reason}`, and a REF_DELTA base that `ref` can't
-  find as `{:missing_base, id}`; callers turn them into `{:error, reason}`.
+  A REF_DELTA base that `ref` can't find is returned as `{:missing_base, id}`.
+  Corrupt or oversized pack data aborts the read by throwing `{:pack_error, reason}`
+  (`fail/1`), which each entry point into the pack code (`GitServer.ObjectDB`,
+  `GitServer.Pack.Indexer`, `GitServer.Pack.Merge`) catches and returns as
+  `{:error, reason}`.
   """
 
   alias GitServer.Pack
@@ -85,12 +88,15 @@ defmodule GitServer.Pack.Reader do
     end
   end
 
-  @doc "Reads the object at `offset`, returning `{type, content}`."
+  @doc "Reads the object at `offset`, returning `{type, content}` or `{:missing_base, id}`."
   def read(%__MODULE__{} = r, offset) do
     walk(r, offset, [], 0)
   end
 
-  @doc "The type and size of the object at `offset`, without inflating a whole object."
+  @doc """
+  The type and size of the object at `offset`, without inflating a whole object, or
+  `{:missing_base, id}`.
+  """
   def type_and_size(%__MODULE__{} = r, offset) do
     e = entry(r, offset)
 
@@ -100,9 +106,14 @@ defmodule GitServer.Pack.Reader do
 
       _delta ->
         case Delta.sizes(inflate_prefix(r, e, 20)) do
-          {:ok, _base_size, size, _} when size <= r.max_object_bytes -> {base_type(r, e, 0), size}
-          {:ok, _, _, _} -> fail("object too large")
-          {:error, reason} -> fail(reason)
+          {:ok, _base_size, size, _} when size <= r.max_object_bytes ->
+            with_size(base_type(r, e, 0), size)
+
+          {:ok, _, _, _} ->
+            fail("object too large")
+
+          {:error, reason} ->
+            fail(reason)
         end
     end
   end
@@ -130,15 +141,30 @@ defmodule GitServer.Pack.Reader do
             apply_chain(r, type, content, 0, deltas)
 
           _delta ->
-            walk(r, base_offset(r, e, depth), [e | deltas], depth + 1)
+            with {:ok, base} <- base_offset(r, e, depth) do
+              walk(r, base, [e | deltas], depth + 1)
+            end
         end
     end
   end
 
+  defp with_size({:missing_base, _id} = missing, _size) do
+    missing
+  end
+
+  defp with_size(type, size) do
+    {type, size}
+  end
+
   defp base_type(r, e, depth) do
     case e.kind do
-      {:base, type} -> type
-      _delta -> base_type(r, entry(r, base_offset(r, e, depth)), depth + 1)
+      {:base, type} ->
+        type
+
+      _delta ->
+        with {:ok, base} <- base_offset(r, e, depth) do
+          base_type(r, entry(r, base), depth + 1)
+        end
     end
   end
 
@@ -148,13 +174,13 @@ defmodule GitServer.Pack.Reader do
   end
 
   defp base_offset(_r, %{kind: {:ofs, base}}, _depth) do
-    base
+    {:ok, base}
   end
 
   defp base_offset(r, %{kind: {:ref, id}}, _depth) do
     case r.ref.(id) do
-      {:ok, base} -> base
-      :error -> throw({:missing_base, id})
+      {:ok, base} -> {:ok, base}
+      :error -> {:missing_base, id}
     end
   end
 
@@ -252,6 +278,7 @@ defmodule GitServer.Pack.Reader do
       :zlib.inflateInit(z)
       fun.(z)
     rescue
+      # :zlib raises on a stream that isn't valid zlib: corrupt pack data.
       e in ErlangError ->
         if match?(%ErlangError{original: :data_error}, e),
           do: fail("corrupt object"),

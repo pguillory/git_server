@@ -77,6 +77,7 @@ defmodule GitServer.Pack.Indexer do
         try do
           {:ok, run(fd, cache, opts)}
         catch
+          # Pack.Reader's abort of a parse of corrupt or oversized pack data.
           {:pack_error, reason} -> {:error, reason}
         after
           Cache.delete(cache)
@@ -251,9 +252,10 @@ defmodule GitServer.Pack.Indexer do
   end
 
   defp resolve(reader, offset, ids) do
-    Reader.read(%{reader | ref: &Map.fetch(ids, &1)}, offset)
-  catch
-    {:missing_base, id} -> {:waiting, id}
+    case Reader.read(%{reader | ref: &Map.fetch(ids, &1)}, offset) do
+      {:missing_base, id} -> {:waiting, id}
+      object -> object
+    end
   end
 
   # Finds where an incoming object's zlib stream ends, since `:zlib` drops input past
@@ -378,34 +380,47 @@ defmodule GitServer.Pack.Indexer do
 
     try do
       :zlib.inflateInit(z)
-      {n, crc} = confirm_feed(fd, z, e.start, stop, e.size, 0, crc0)
-      :zlib.inflateEnd(z)
-      if n == e.size, do: {stop, crc}
+
+      case confirm_feed(fd, z, e.start, stop, e.size, 0, crc0) do
+        {:ok, n, crc} ->
+          :zlib.inflateEnd(z)
+          if n == e.size, do: {stop, crc}
+
+        :too_long ->
+          nil
+      end
     rescue
+      # :zlib reports a stream that isn't valid by raising; here that only means
+      # this candidate end isn't the stream's.
       error in ErlangError ->
         if match?(%ErlangError{original: :data_error}, error),
           do: nil,
           else: reraise(error, __STACKTRACE__)
-    catch
-      :too_long -> nil
     after
       :zlib.close(z)
     end
   end
 
+  # `{:ok, n, crc}`, or `:too_long` once the output passes `size`.
   defp confirm_feed(_fd, _z, pos, stop, _size, n, crc) when pos >= stop do
-    {n, crc}
+    {:ok, n, crc}
   end
 
   defp confirm_feed(fd, z, pos, stop, size, n, crc) do
     bytes = Reader.pread(fd, pos, min(@chunk, stop - pos))
-    n = confirm_drain(z, Reader.safe_inflate(z, bytes), size, n)
-    confirm_feed(fd, z, pos + byte_size(bytes), stop, size, n, :erlang.crc32(crc, bytes))
+
+    with {:ok, n} <- confirm_drain(z, Reader.safe_inflate(z, bytes), size, n) do
+      confirm_feed(fd, z, pos + byte_size(bytes), stop, size, n, :erlang.crc32(crc, bytes))
+    end
   end
 
   defp confirm_drain(z, {status, out}, size, n) do
     n = n + IO.iodata_length(out)
-    if n > size, do: throw(:too_long)
-    if status == :continue, do: confirm_drain(z, Reader.safe_inflate(z, []), size, n), else: n
+
+    cond do
+      n > size -> :too_long
+      status == :continue -> confirm_drain(z, Reader.safe_inflate(z, []), size, n)
+      true -> {:ok, n}
+    end
   end
 end

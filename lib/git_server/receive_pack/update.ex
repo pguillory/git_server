@@ -85,6 +85,8 @@ defmodule GitServer.ReceivePack.Update do
           config.after_update.(push)
           :ok
         catch
+          # The host's function, outside this library: a failure is logged by kind
+          # only, since the push may carry content and the conn credentials.
           kind, reason -> {:failed, GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
         end
       end
@@ -285,6 +287,7 @@ defmodule GitServer.ReceivePack.Update do
             _other -> {:failed, "returned something other than :ok or {:reject, message}"}
           end
         catch
+          # The host's function, outside this library: a failure refuses the push.
           kind, reason -> {:failed, GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
         after
           ObjectDB.close(db)

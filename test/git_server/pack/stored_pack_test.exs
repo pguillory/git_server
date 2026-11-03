@@ -78,7 +78,7 @@ defmodule GitServer.Pack.StoredPackTest do
     assert ObjectDB.read(db, id) == {:error, "missing delta base"}
 
     assert {:error, "missing delta base", _} =
-             GitServer.Pack.Writer.write(db, [id], [], fn piece, acc -> [acc | piece] end)
+             GitServer.Pack.Writer.write(db, [id], [], fn piece, acc -> {:ok, [acc | piece]} end)
   end
 
   test "the depth limit holds when part of a chain is cached", %{tmp_dir: dir} do

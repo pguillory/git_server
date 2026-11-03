@@ -407,28 +407,38 @@ defmodule GitServer.UploadPack do
     else
       {:error, reason} -> error(conn, reason)
     end
-  catch
-    {:client_gone, conn} -> conn
   end
 
   defp stream_pack(conn, db, ids, preamble) do
     conn = HTTP.chunked_result(conn, @service)
-    conn = send_chunk(conn, [preamble, PktLine.encode("packfile\n")])
     emit = fn piece, conn -> send_chunk(conn, PktLine.sideband(1, piece)) end
 
-    case Writer.write(db, ids, conn, emit) do
-      {:ok, _checksum, conn} ->
+    result =
+      with {:ok, conn} <- send_chunk(conn, [preamble, PktLine.encode("packfile\n")]),
+           {:ok, _checksum, conn} <- Writer.write(db, ids, conn, emit) do
         send_chunk(conn, PktLine.flush())
+      end
+
+    case result do
+      {:ok, conn} ->
+        conn
+
+      {:error, :client_gone, conn} ->
+        conn
 
       {:error, reason, conn} ->
-        send_chunk(conn, [PktLine.sideband(3, "git_server: #{reason}\n"), PktLine.flush()])
+        case send_chunk(conn, [PktLine.sideband(3, "git_server: #{reason}\n"), PktLine.flush()]) do
+          {:ok, conn} -> conn
+          {:error, :client_gone, conn} -> conn
+        end
     end
   end
 
+  # `{:ok, conn}`, or `{:error, :client_gone, conn}` with the conn as it was.
   defp send_chunk(conn, data) do
     case chunk(conn, data) do
-      {:ok, conn} -> conn
-      {:error, _reason} -> throw({:client_gone, conn})
+      {:ok, conn} -> {:ok, conn}
+      {:error, _reason} -> {:error, :client_gone, conn}
     end
   end
 

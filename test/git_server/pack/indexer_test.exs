@@ -40,7 +40,10 @@ defmodule GitServer.Pack.IndexerTest do
   test "indexes a pack from our writer as git does", %{fixture: f, objects: objects} do
     {:ok, db} = ObjectDB.open([f.packs.ref])
     ids = for {hex, _, _} <- objects, do: elem(ObjectId.from_hex(hex), 1)
-    {:ok, _checksum, pieces} = Writer.write(db, ids, [], fn piece, acc -> [acc | piece] end)
+
+    {:ok, _checksum, pieces} =
+      Writer.write(db, ids, [], fn piece, acc -> {:ok, [acc | piece]} end)
+
     path = write(f.home, "ours.pack", IO.iodata_to_binary(pieces))
     {:ok, result} = Indexer.index(path)
     git!(f.home, f.home, ["index-pack", "-o", Path.join(f.home, "ours.idx"), path])

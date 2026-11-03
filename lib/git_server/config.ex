@@ -106,6 +106,8 @@ defmodule GitServer.Config do
        do: {:ok, result},
        else: {:error, "the config function returned something other than a keyword list or map"}
   catch
+    # The host's function, outside this library: its failure is refused, and
+    # described by kind only, since the options hold the store's secrets.
     kind, reason ->
       {:error, "the config function " <> GitServer.Failure.describe(kind, reason, __STACKTRACE__)}
   end

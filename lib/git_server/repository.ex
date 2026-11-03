@@ -137,6 +137,7 @@ defmodule GitServer.Repository do
             download(snapshot, state, etag)
           end
         catch
+          # Cleanup only: the directory goes on any failure, which then goes on.
           kind, reason ->
             File.rm_rf(dir)
             :erlang.raise(kind, reason, __STACKTRACE__)

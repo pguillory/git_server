@@ -89,6 +89,7 @@ defmodule GitServer.Body do
       {:error, reason} -> fail(reader, reason)
     end
   catch
+    # :zlib raises on a body that isn't valid gzip: garbage from the client.
     :error, _ -> fail(reader, :bad_gzip)
   end
 
