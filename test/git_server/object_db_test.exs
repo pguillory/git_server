@@ -3,8 +3,8 @@ defmodule GitServer.ObjectDBTest do
 
   import GitServer.LocalGit
 
-  alias GitServer.{GitFixture, Object, ObjectDB, ObjectId, Pack}
-  alias GitServer.Pack.{Idx, Writer}
+  alias GitServer.{GitFixture, Object, ObjectDB, ObjectId, Pack, PackBuilder}
+  alias GitServer.Pack.{Files, Idx, Writer}
 
   setup_all do
     home = tmp_dir!("object_db")
@@ -57,6 +57,43 @@ defmodule GitServer.ObjectDBTest do
 
     for {hex, type, content} <- objects do
       assert ObjectDB.read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
+    end
+  end
+
+  test "holds only a few packs open however many it reads", %{fixture: f} do
+    blobs = for i <- 1..40, do: "blob #{i}\n"
+
+    packs =
+      for {content, i} <- Enum.with_index(blobs) do
+        {pack, entries} = PackBuilder.build([PackBuilder.object(:blob, content)])
+        pack_path = Path.join(f.home, "many-#{i}.pack")
+        idx_path = Path.join(f.home, "many-#{i}.idx")
+        File.write!(pack_path, pack)
+        File.write!(idx_path, Idx.encode(entries, binary_part(pack, byte_size(pack) - 20, 20)))
+        {pack_path, idx_path}
+      end
+
+    {:ok, db} = ObjectDB.open(packs, max_open_files: 3)
+    assert Files.open_count(db.files) <= 3
+
+    for _round <- 1..2, content <- Enum.shuffle(blobs) do
+      assert ObjectDB.read(db, Object.id(:blob, content)) == {:ok, :blob, content}
+      assert Files.open_count(db.files) <= 3
+    end
+
+    ObjectDB.close(db)
+  end
+
+  test "follows deltas through a pack reopened for the read", %{fixture: f, objects: objects} do
+    # Each order puts a different pack first, where every read lands.
+    for packs <- [[:ref, :ofs, :repacked], [:ofs, :repacked, :ref], [:repacked, :ref, :ofs]] do
+      {:ok, db} = ObjectDB.open(Enum.map(packs, &f.packs[&1]), max_open_files: 1)
+
+      for {hex, type, content} <- Enum.shuffle(objects) do
+        assert ObjectDB.read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
+      end
+
+      ObjectDB.close(db)
     end
   end
 
