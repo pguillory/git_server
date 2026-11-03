@@ -49,6 +49,13 @@ defmodule GitServer.RepoName do
       not String.ends_with?(segment, ".git")
   end
 
+  @doc """
+  The canonical name for a repository name given by a host, such as `"alice/notes"`
+  or `"alice/notes.git"`, by the same rules: `{:ok, name}` or `:error`.
+  """
+  def canonical(name) when is_binary(name), do: parse("/" <> name, String.split(name, "/"))
+  def canonical(_name), do: :error
+
   @doc "The store key prefix for a repository's objects."
   def key_prefix(name) do
     name <> ".git/"

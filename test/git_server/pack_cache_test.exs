@@ -43,17 +43,17 @@ defmodule GitServer.PackCacheTest do
     # No cache: every pack and idx, each clone.
     CountingStore.reset(store)
     assert clone!(plain, "r", Path.join(tmp_dir, "plain")) == 30
-    assert %{get_files: 60, gets: gets} = CountingStore.counts(store)
+    assert %{get_files: 60, gets: gets, deletes: 0} = CountingStore.counts(store)
 
     # A cold cache downloads the same, and a warm one nothing but the state.
     CountingStore.reset(store)
     assert clone!(cached, "r", Path.join(tmp_dir, "cold")) == 30
-    assert CountingStore.counts(store) == %{get_files: 60, gets: gets}
+    assert CountingStore.counts(store) == %{get_files: 60, gets: gets, deletes: 0}
     assert length(cache_files(cache_dir)) == 60
 
     CountingStore.reset(store)
     assert clone!(cached, "r", Path.join(tmp_dir, "warm")) == 30
-    assert CountingStore.counts(store) == %{get_files: 0, gets: gets}
+    assert CountingStore.counts(store) == %{get_files: 0, gets: gets, deletes: 0}
 
     # A push through the cached server takes the packs from the cache too.
     commit!(local, "f", "31\n")

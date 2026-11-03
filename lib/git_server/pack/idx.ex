@@ -99,6 +99,16 @@ defmodule GitServer.Pack.Idx do
     counts |> Enum.chunk_every(2, 1, :discard) |> Enum.all?(fn [a, b] -> a <= b end)
   end
 
+  @doc """
+  The most objects an index of `bytes` bytes can list: the header, fanout and two
+  checksums are fixed, and each object takes 28 bytes (plus 8 for an offset past
+  2 GB, which only makes this an overestimate).
+  """
+  def max_count(bytes) do
+    fixed = byte_size(@magic) + @fanout_size + 2 * ObjectId.size()
+    div(max(bytes - fixed, 0), ObjectId.size() + 8)
+  end
+
   @doc "The pack offset of `id`, or `:error` if the pack doesn't hold it."
   @spec offset(t, ObjectId.t()) :: {:ok, non_neg_integer} | :error
   def offset(%__MODULE__{} = idx, <<first, _::binary>> = id) do

@@ -22,12 +22,13 @@ defmodule GitServer.Repository do
   defmodule Snapshot do
     @moduledoc """
     A repository state with its packs downloaded: `packs` holds a
-    `{pack_path, idx_path}` pair for each pack the state lists, in the state's order.
+    `{pack_path, idx_path}` pair for each pack the state lists, in the state's order,
+    or with `only` set, for each of those packs the state lists.
     `etag` is the state's ETag, or `:absent` for an empty repository with no state
     object.
     """
     @enforce_keys [:store, :repo, :dir, :state, :etag, :packs]
-    defstruct [:concurrency, :cache | @enforce_keys]
+    defstruct [:concurrency, :cache, :only | @enforce_keys]
   end
 
   @doc "The store key of a repository's state."
@@ -70,6 +71,29 @@ defmodule GitServer.Repository do
   end
 
   @doc """
+  Stores a pack, from the file at `pack_path`, and its idx under the pack's name
+  (its checksum in hex), both at once: `:ok` or `{:error, reason}`. Unconditional:
+  the name is the content's checksum, so writing it again is harmless. Only a state
+  write that lists the pack must come after both.
+  """
+  def put_pack(store, repo, name, pack_path, idx) do
+    idx_task =
+      Task.async(fn ->
+        Failure.catching("the store upload", fn ->
+          Store.put(store, idx_key(repo, name), idx, :none)
+        end)
+      end)
+
+    stored = Store.put_file(store, pack_key(repo, name), pack_path, :none)
+    idx_stored = Task.await(idx_task, :infinity)
+
+    with {:ok, _} <- stored,
+         {:ok, _} <- idx_stored do
+      :ok
+    end
+  end
+
+  @doc """
   Reads the state and downloads every pack and idx it lists into a new directory
   under `temp_dir`: `{:ok, snapshot}` or `{:error, reason}`. The directory is gone
   again on error; on success the caller deletes it with `release/1`.
@@ -79,7 +103,8 @@ defmodule GitServer.Repository do
   way never stands under its final name. With `cache: {dir, max_bytes}`, packs come
   from that `GitServer.PackCache` when it has them, and downloaded ones go into it;
   a cache directory that can't be created is logged and the snapshot goes on
-  without it.
+  without it. With `only:` a list of pack names, only those of them the state lists
+  are downloaded, here and in `refresh/1`, for a caller that reads no others.
   """
   def snapshot(store, repo, temp_dir, opts \\ []) do
     with {:ok, cache} <- open_cache(opts[:cache], store),
@@ -96,6 +121,7 @@ defmodule GitServer.Repository do
               packs: [],
               concurrency: Keyword.get(opts, :concurrency, 8),
               cache: cache,
+              only: opts[:only] && MapSet.new(opts[:only]),
             }
 
             download(snapshot, state, etag)
@@ -205,10 +231,15 @@ defmodule GitServer.Repository do
   # Only files not already in the directory, from before a refresh, or in the cache
   # are downloaded.
   defp download(snapshot, state, etag) do
-    paths = Map.new(state.packs, &{&1, pack_paths(snapshot, &1)})
+    names =
+      if snapshot.only,
+        do: Enum.filter(state.packs, &MapSet.member?(snapshot.only, &1)),
+        else: state.packs
+
+    paths = Map.new(names, &{&1, pack_paths(snapshot, &1)})
 
     if snapshot.cache do
-      Enum.each(state.packs, fn name ->
+      Enum.each(names, fn name ->
         {pack_path, idx_path} = paths[name]
 
         if not File.exists?(pack_path) and not File.exists?(idx_path),
@@ -217,7 +248,7 @@ defmodule GitServer.Repository do
     end
 
     files =
-      for name <- state.packs,
+      for name <- names,
           {pack_path, idx_path} = paths[name],
           {key, path} <- [
             {idx_key(snapshot.repo, name), idx_path},
@@ -250,7 +281,7 @@ defmodule GitServer.Repository do
 
     with nil <- failure,
          :ok <- cache_downloads(snapshot, downloaded, paths) do
-      {:ok, %{snapshot | state: state, etag: etag, packs: Enum.map(state.packs, &paths[&1])}}
+      {:ok, %{snapshot | state: state, etag: etag, packs: Enum.map(names, &paths[&1])}}
     end
   end
 

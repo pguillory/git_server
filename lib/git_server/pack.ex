@@ -37,8 +37,16 @@ defmodule GitServer.Pack do
   def parse_header(_), do: {:error, "not a pack file"}
 
   @doc "Encodes an object header for a whole object."
-  def encode_object_header(type, size) do
-    code = type_code(type)
+  def encode_object_header(type, size), do: encode_size(type_code(type), size)
+
+  @doc """
+  Encodes the header of an OFS_DELTA entry: its delta's inflated `size`, and its
+  base `distance` bytes before the entry's own offset.
+  """
+  def encode_ofs_delta_header(size, distance) when distance > 0,
+    do: encode_size(6, size) <> encode_ofs_distance(distance)
+
+  defp encode_size(code, size) do
     first = bor(code <<< 4, band(size, 0x0F))
     encode_size_rest(first, size >>> 4)
   end
@@ -111,6 +119,15 @@ defmodule GitServer.Pack do
     value = if n == 0, do: band(byte, 0x7F), else: bor((value + 1) <<< 7, band(byte, 0x7F))
     if byte >= 0x80, do: ofs_varint(rest, value, n + 1), else: {:ok, value, n + 1}
   end
+
+  # The inverse of `ofs_varint/3`: big-endian 7-bit groups, subtracting 1 before
+  # each shift.
+  defp encode_ofs_distance(distance) do
+    :erlang.list_to_binary(ofs_bytes(distance >>> 7, [band(distance, 0x7F)]))
+  end
+
+  defp ofs_bytes(0, acc), do: acc
+  defp ofs_bytes(n, acc), do: ofs_bytes((n - 1) >>> 7, [bor(0x80, band(n - 1, 0x7F)) | acc])
 
   defp type_code(:commit), do: 1
   defp type_code(:tree), do: 2

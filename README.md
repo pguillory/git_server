@@ -250,6 +250,61 @@ runs past `:after_update_timeout_ms`, the server logs which, as for `before_upda
 the push, already landed, is unaffected. The request's connection waits for it, so hand
 slow work to a job queue.
 
+### Compaction
+
+Every push adds a pack, and a fetch or push without a warm pack cache downloads every
+listed pack, so a repository with many pushes gets slower to clone. `GitServer.compact/3`
+merges a repository's small packs into one, keeping every object:
+
+```elixir
+GitServer.compact(opts, "alice/notes")
+```
+
+`opts` are the Plug's options (or `config:`), for the store, `:temp_dir`, the pack cache,
+the object limits and `:push_deadline_ms`. Nothing calls it automatically. Call it on a
+schedule, or after pushes from `:after_update`, for example
+`Task.start(fn -> GitServer.compact(opts, push.repo) end)`. It's safe at any time:
+alongside pushes, fetches and other compactions, on any number of servers. A second
+compaction of the same repository on the same server returns `{:ok, :busy}` at once, but
+compactions of different repositories run side by side, each using up to twice
+`:max_compact_bytes` of `:temp_dir` and taking as long as the merge does (it has no time
+limit), so on a busy server run them from a queue that bounds how many run at once.
+
+It picks packs the way `git repack --geometric=2` does: the smallest roll up until every
+pack left is at least twice the size of the next smaller, so the pack count and the bytes
+rewritten per push stay logarithmic in the number of pushes, while merges fit the caps
+below. Options, as a third argument:
+
+- `:max_packs`: nothing merges while a repository lists at most this many packs.
+  Default 8.
+- `:max_compact_bytes`: the largest pack one compaction writes, and the most bytes of
+  packs it merges. Packs over this size are never merged, so a big repository ends with
+  a few large packs plus the small ones. If objects written whole (below) would take a
+  merge past it, the packs before the one that did it merge without it (or, if fewer
+  than two come before it, the others merge once without it). If no two packs fit, it
+  returns `{:error, "compaction stopped: ..."}` and logs a warning, on every call until
+  the repository's packs change. Default 1 GB.
+- `:max_compact_objects`: the most objects one compaction merges, which bounds its
+  memory. Default 500,000.
+
+It decides from `state` and one listing of the repository's packs, then downloads only the
+packs it merges. The merge copies entries as they are stored, without recompressing, and
+writes an object whole only where its delta's base was a duplicate it dropped. Before
+anything is stored, the new pack is indexed in full and must hold exactly the merged
+packs' objects. It is listed in their place by the same conditional `state` write as a
+push, only if every merged pack is still listed; refs and HEAD are left as they are.
+
+It returns `{:ok, %{merged: n, packs: m}}`, `{:ok, :unchanged}` (nothing to merge),
+`{:ok, :superseded}` (another compaction merged one of the packs first), `{:ok, :busy}`, or
+`{:error, reason}`, for example a store failure, or `:push_deadline_ms` passed while pushes
+kept winning. A pack that fails the check is logged at error level and nothing changes.
+
+It deletes nothing. The merged packs stay in the store, unlisted, so a fetch that read
+`state` before the merge still finds them. Storage grows by the bytes compaction
+rewrites, logarithmic per push. A stored pack is read with the current
+`:max_object_bytes` and `:max_delta_depth`, so lowering them makes older packs unreadable
+to fetches and compaction alike.
+
 ## When something goes wrong
 
 What `git` prints for each failure (the tests check these lines, against real git for
@@ -299,14 +354,15 @@ Everything for a repository is under `<prefix><repo>.git/`:
 
 ```text
 state                  HEAD, refs and the list of packs: one small text object
-packs/<checksum>.pack  a pack as the client pushed it, immutable
+packs/<checksum>.pack  a pack as the client pushed it, or as compaction merged it, immutable
 packs/<checksum>.idx   its index in git's own idx v2 format, immutable
 ```
 
 A push writes at most these three objects, however many git objects it holds. Listing
 refs reads only `state`. A fetch or a push also downloads every listed pack and index to
 temporary files, deleted when the request ends, so without the pack cache it costs about
-1 + 2 × packs GETs, `:download_concurrency` at a time. Nothing compacts packs yet.
+1 + 2 × packs GETs, `:download_concurrency` at a time. Compaction (above) keeps the number
+of packs small.
 
 With `:pack_cache_dir`, downloaded packs and indexes are also kept in that directory, so
 a request downloads only packs it hasn't seen and a warm fetch reads only `state`. A
@@ -345,6 +401,10 @@ The store must support conditional PUT (`If-Match` and `If-None-Match: *`).
    for read after write, as R2 and MinIO are.
 5. A push never deletes anything, not even when rejected. Deleting a branch only removes
    the ref.
+6. Compaction is the only other writer of `state`, through the same conditional write.
+   It replaces packs only with one holding exactly their objects, checked before it is
+   stored, so every later `state` lists every object an earlier one did, and a push that
+   loses its race to a compaction still finds everything it checked. It deletes nothing.
 
 These rest on the bucket's conditional writes being atomic. Tests cover them on MinIO,
 including two writers racing for one key.
@@ -368,7 +428,8 @@ changes.
   clones and fetches work (`--depth`, `--deepen`, `--shallow-since`, `--unshallow`).
 - SHA-256 repositories.
 - Push options, signed pushes and thin packs (the server tells clients not to send them).
-- Pack compaction and garbage collection of unlisted packs.
+- Garbage collection of unlisted packs (from interrupted or refused pushes, and packs
+  compaction merged).
 
 ## Tests
 

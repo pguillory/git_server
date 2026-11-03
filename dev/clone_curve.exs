@@ -1,6 +1,6 @@
 # Measures how clones and pushes slow down as pushes pile up, for a repository shaped
-# like a rule set: a few small text files and one small commit per push. Every pack
-# stays listed, so this is the cost of having no compaction.
+# like a rule set: a few small text files and one small commit per push. Without
+# --compact every pack stays listed, so this is the cost of having no compaction.
 #
 #     bin/test-s3-local start
 #     (set -a; source tmp/test-s3.env; set +a; mix run dev/clone_curve.exs)
@@ -15,6 +15,10 @@
 #   --timed-pushes 3     pushes through git just before each later point, and timed
 #   --pack-cache MODE    serve with a pack cache: "cold" empties it before each clone,
 #                        "warm" fills it with an untimed clone first (default no cache)
+#   --compact            at each point, after measuring, run GitServer.compact (with
+#                        its defaults), measure the clones again, and time
+#                        --timed-pushes more pushes through git against the compacted
+#                        repository; those pushes count toward the next point
 #
 # Clones and timed pushes always use the real git client, against the server on
 # loopback. Between them, to save hours, the other pushes are a shortcut that writes
@@ -23,10 +27,11 @@
 # real push checks this by making that pack first and comparing it to the one the
 # server listed, and the "same packs" count in the output reports the result.
 #
-# Columns: pushes; clones that succeeded; clone wall time mean, min and max in ms; the
-# S3 GETs and KB read per clone; the ms per clone spent inside S3 GETs, the rest being
-# git and the server's own work; pack KB received by git; mean ms and S3 GETs of the
-# timed pushes.
+# Columns: pushes; "before" or "after" compaction ("-" without --compact), and after
+# it the compaction's ms and the packs listed; clones that succeeded; clone wall time
+# mean, min and max in ms; the S3 GETs and KB read per clone; the ms per clone spent
+# inside S3 GETs, the rest being git and the server's own work; pack KB received by
+# git; mean ms and S3 GETs of the timed pushes.
 #
 # Set ulimit -n to check the server's open files: a request holds only a few packs open
 # at once (ObjectDB's :max_open_files), whatever the pack count.
@@ -107,6 +112,7 @@ defmodule CloneCurve do
           real_until: :integer,
           timed_pushes: :integer,
           pack_cache: :string,
+          compact: :boolean,
         ]
       )
 
@@ -129,12 +135,13 @@ defmodule CloneCurve do
       timed_pushes: opts[:timed_pushes] || 3,
       git_env: git_env(work),
       pack_cache: opts[:pack_cache],
+      compact: opts[:compact] || false,
       cache_dir: Path.join(work, "pack-cache"),
     }
 
     inner = inner_store()
     store = CountingStore.wrap(inner)
-    run = Map.merge(run, %{store: store, url: serve(store, run.pack_cache && run.cache_dir)})
+    run = Map.merge(run, %{store: store, url: serve(run_options(store, run))})
 
     try do
       git!(run, ["init", "-q", "-b", "main", run.local], work)
@@ -167,15 +174,21 @@ defmodule CloneCurve do
 
   defp random, do: Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
 
-  defp serve(store, cache_dir) do
+  defp run_options(store, run) do
     authorize = fn
       %{credentials: {"curve", "curve"}} -> :ok
       _request -> :unauthorized
     end
 
+    [store: store, authorize: authorize, pack_cache_dir: run.pack_cache && run.cache_dir]
+  end
+
+  defp plug_options(run), do: run_options(run.store, run)
+
+  defp serve(options) do
     {:ok, pid} =
       Bandit.start_link(
-        plug: {GitServer.Plug, store: store, authorize: authorize, pack_cache_dir: cache_dir},
+        plug: {GitServer.Plug, options},
         scheme: :http,
         ip: {127, 0, 0, 1},
         port: 0,
@@ -225,8 +238,39 @@ defmodule CloneCurve do
     {same, compared, timings} =
       Enum.reduce((pushes + 1)..target//1, {same, compared, []}, &push(run, &1, timed_from, &2))
 
-    report(run, target, Enum.take(timings, timed), measure_clones(run, target))
-    {target, same, compared}
+    phase = if run.compact, do: "before", else: "-"
+    report(run, target, phase, Enum.take(timings, timed), measure_clones(run, target))
+
+    if run.compact do
+      started = System.monotonic_time(:millisecond)
+      {:ok, result} = GitServer.compact(plug_options(run), @repo)
+      ms = System.monotonic_time(:millisecond) - started
+      {:ok, state, _etag} = Repository.read_state(inner(run), @repo)
+      clones = measure_clones(run, target)
+
+      pushes =
+        for count <- (target + 1)..(target + run.timed_pushes)//1 do
+          commit!(run, count)
+          timed_push!(run)
+        end
+
+      phase = "after (#{ms} ms, #{length(state.packs)} packs#{merged(result)})"
+      report(run, target, phase, pushes, clones)
+      {target + run.timed_pushes, same, compared}
+    else
+      {target, same, compared}
+    end
+  end
+
+  defp merged(%{merged: n}), do: ", #{n} merged"
+  defp merged(other), do: ", #{other}"
+
+  defp timed_push!(run) do
+    before = CountingStore.read(run.store)
+    started = System.monotonic_time(:millisecond)
+    git!(run, ["push", "-q", "origin", "main"], run.local)
+    elapsed = System.monotonic_time(:millisecond) - started
+    {elapsed, CountingStore.read(run.store).gets - before.gets}
   end
 
   # One push, through git (timed, and checked against the shortcut's pack) or the shortcut.
@@ -372,13 +416,13 @@ defmodule CloneCurve do
 
   defp header do
     IO.puts(
-      "| pushes | ok | clone ms | min | max | GETs | KB read | ms in GETs | pack KB | push ms | push GETs |"
+      "| pushes | when | ok | clone ms | min | max | GETs | KB read | ms in GETs | pack KB | push ms | push GETs |"
     )
 
-    IO.puts("|---|---|---|---|---|---|---|---|---|---|---|")
+    IO.puts("|---|---|---|---|---|---|---|---|---|---|---|---|")
   end
 
-  defp report(run, target, pushes, results) do
+  defp report(run, target, phase, pushes, results) do
     ok = Enum.filter(results, & &1.ok)
 
     mean = fn list, key ->
@@ -389,6 +433,7 @@ defmodule CloneCurve do
 
     row = [
       target,
+      phase,
       "#{length(ok)}/#{run.clones}",
       round(mean.(results, & &1.ms)),
       Enum.min(ms),

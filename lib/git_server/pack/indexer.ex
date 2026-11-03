@@ -14,9 +14,12 @@ defmodule GitServer.Pack.Indexer do
       caller (default 1,000,000)
     * `:max_work_bytes` - bytes inflated and produced by deltas, in all, including
       re-resolving delta bases the cache couldn't keep (default 2 GB), so a pack
-      crafted to make indexing slow fails instead
+      crafted to make indexing slow fails instead; `nil` for no limit
     * `:max_delta_depth` - the longest delta chain (default 100)
     * `:cache_bytes` - the resolved-base cache (default 32 MB)
+    * `:links` - whether to keep each object's links in the result (default true).
+      With `false`, links are still parsed and checked, but every object's list is
+      empty and `:max_links` doesn't apply, for a caller that only needs the ids.
 
   It runs in two passes. Pass 1 reads the objects in order, recording each one's
   offset, kind and size, and the id of each whole object. Its zlib stream's end isn't
@@ -40,6 +43,7 @@ defmodule GitServer.Pack.Indexer do
     max_work_bytes: 2_000_000_000,
     max_delta_depth: 100,
     cache_bytes: 32_000_000,
+    links: true,
   ]
 
   @typedoc """
@@ -98,11 +102,11 @@ defmodule GitServer.Pack.Indexer do
 
     if count > opts[:max_objects], do: Reader.fail("too many objects")
 
-    budget = Reader.new_budget(opts[:max_work_bytes])
+    budget = opts[:max_work_bytes] && Reader.new_budget(opts[:max_work_bytes])
     opts = Keyword.put(opts, :budget, budget)
 
     {entries, ids, left} =
-      pass1(fd, Pack.header_size(), data_end, count, opts, %{}, %{}, opts[:max_links])
+      pass1(fd, Pack.header_size(), data_end, count, opts, %{}, %{}, links_left(opts))
 
     reader = %Reader{
       fd: fd,
@@ -190,6 +194,16 @@ defmodule GitServer.Pack.Indexer do
   defp add_id(ids, id, offset) do
     if Map.has_key?(ids, id), do: Reader.fail("duplicate object #{ObjectId.to_hex(id)}")
     Map.put(ids, id, offset)
+  end
+
+  # `left` is the links still allowed, or `:discard` to check links and keep none.
+  defp links_left(opts), do: if(opts[:links], do: opts[:max_links], else: :discard)
+
+  defp links(type, content, id, :discard) do
+    case Object.parse_links(type, content) do
+      {:ok, _links} -> {[], :discard}
+      {:error, reason} -> Reader.fail("#{reason} #{ObjectId.to_hex(id)}")
+    end
   end
 
   defp links(type, content, id, left) do

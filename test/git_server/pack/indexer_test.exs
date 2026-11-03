@@ -57,6 +57,18 @@ defmodule GitServer.Pack.IndexerTest do
 
     assert Indexer.index(pack_path, max_delta_depth: 1) == {:error, "delta chain too deep"}
     assert {:ok, _} = Indexer.index(pack_path, cache_bytes: 0)
+    assert {:ok, _} = Indexer.index(pack_path, max_work_bytes: nil, cache_bytes: 0)
+  end
+
+  test "without links, checks them but neither keeps nor counts them", %{fixture: f} do
+    {pack_path, idx_path} = f.packs.repacked
+    {:ok, result} = Indexer.index(pack_path, max_links: 1, links: false)
+    assert result.idx == File.read!(idx_path)
+    assert Enum.all?(result.objects, fn {_id, {_type, links}} -> links == [] end)
+
+    tree = object(:tree, "100644 f\0short")
+    path = write(f.home, "bad-tree.pack", elem(build([tree]), 0))
+    assert {:error, "malformed tree " <> _} = Indexer.index(path, links: false)
   end
 
   test "a bad trailer and a truncated pack", %{fixture: f} do

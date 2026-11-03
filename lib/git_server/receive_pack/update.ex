@@ -11,7 +11,7 @@ defmodule GitServer.ReceivePack.Update do
   # from `before_update`.
 
   require Logger
-  alias GitServer.{Config, ObjectDB, ObjectId, Repository, State, Store}
+  alias GitServer.{Config, ObjectDB, ObjectId, Repository, State}
   alias GitServer.Pack.Indexer
 
   @zero_id String.duplicate("0", 40)
@@ -428,21 +428,8 @@ defmodule GitServer.ReceivePack.Update do
     if name in snapshot.state.packs do
       {:ok, name}
     else
-      # Both at once: only the state write that lists them must come after both.
-      idx =
-        Task.async(fn ->
-          GitServer.Failure.catching("the store upload", fn ->
-            Store.put(config.store, Repository.idx_key(snapshot.repo, name), pack.idx, :none)
-          end)
-        end)
-
-      stored = Store.put_file(config.store, Repository.pack_key(snapshot.repo, name), path, :none)
-      idx_stored = Task.await(idx, :infinity)
-
-      with {:ok, _} <- stored,
-           {:ok, _} <- idx_stored do
-        {:ok, name}
-      end
+      with :ok <- Repository.put_pack(config.store, snapshot.repo, name, path, pack.idx),
+           do: {:ok, name}
     end
   end
 

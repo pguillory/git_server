@@ -51,12 +51,13 @@ supplies the store configuration and an `authorize` callback, and holds every se
 - `GitServer.PktLine`: pkt-line and side-band framing. `GitServer.Body`: capped,
   gzip-aware request body reading, whole or streamed to a file, and draining the
   rest of an oversized body so the reply reaches git.
-- `GitServer.RepoName`: repository names from the request path.
+- `GitServer.RepoName`: repository names from the request path, or from a host.
 - `GitServer.State`: the text codec of a repository's `state` object (HEAD, refs,
   pack list). `GitServer.Repository`: the store layout, state reads, the conditional
   state write, `update` (the retry loop every state writer goes through: compute,
   write conditionally, refresh and compute again on a lost race, up to a deadline),
-  and snapshots (the listed packs downloaded, several at once, to a temp directory).
+  snapshots (the listed packs, or only named ones, downloaded several at once to a
+  temp directory), and storing a pack with its idx.
   `GitServer.PackCache`: the optional local cache of stored packs snapshots take from
   and add to: checked on insert, hard-linked out, evicted by file.
 - `GitServer.ReceivePack`: push, the receive-pack advertisement and request side:
@@ -67,6 +68,12 @@ supplies the store configuration and an `authorize` callback, and holds every se
   on every attempt, and `after_update` called once a push landed. `GitServer.Push`: what that check sees, and reading files at a
   commit (`list_files`, `read_file`).
   `GitServer.RefName`: the ref names a push may update.
+- `GitServer.Compaction`: `GitServer.compact/3`, which the host calls: the geometric
+  choice of packs from `state` and one listing, the merged pack indexed and checked to
+  hold exactly its inputs' objects, then published through `Repository.update` only
+  while every input is still listed. It deletes nothing. `GitServer.Pack.Merge`: the
+  merge itself, over local files: entries copied raw (OFS_DELTA offsets rewritten),
+  each object once, a delta written whole where its base was a dropped duplicate.
 - `GitServer.Store`: the store behaviour (`get`, `get_file`, `put`, `put_file` with a
   condition, `delete`, `list`). `GitServer.Store.S3` is its implementation.
 

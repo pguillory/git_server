@@ -17,7 +17,9 @@ object, written with a conditional PUT, that decides what is visible. git_server
   and caching immutable packs by content on local disk. Not taken: a freshness TTL that
   skips reading the manifest (it costs read-your-writes across servers), group commit
   of concurrent pushes, and a lease so that one instance maintains a repository at a
-  time; git_server lets the conditional write decide between racing writers instead.
+  time; git_server lets the conditional write decide between racing writers instead,
+  compactions included: like walgit's, a compaction publishes only while every pack it
+  merged is still listed, and retires them without deleting them.
 - Xe Iaso, "I taught a bucket to speak git" (Tigris, June 23, 2026,
   https://www.tigrisdata.com/blog/objgit/, discussed at
   https://news.ycombinator.com/item?id=48661938): a filesystem layer over the bucket
@@ -52,9 +54,10 @@ object, written with a conditional PUT, that decides what is visible. git_server
 - Enroute, "Everyone is doing Git on S3 wrong"
   (https://enroute.sh/blog/everyone-is-doing-git-on-s3-wrong): immutable layers built
   without locks, ordered only by compare-and-swap on the refs a push moves, and merged
-  roughly geometrically by copying bytes without recompressing. Taken: merging packs by
-  raw copy, geometrically, if git_server compacts. Not taken: rewriting packs as they
-  arrive; git_server stores a push's pack as the client sent it.
+  roughly geometrically by copying bytes without recompressing. Taken: compaction
+  merges packs by raw copy, geometrically (`git repack --geometric=2`'s choice). Not
+  taken: rewriting packs as they arrive; git_server stores a push's pack as the client
+  sent it.
 
 None of them deletes old packs safely. Tigris keeps everything, Enroute lists garbage
 collection as unfinished, Cursor's and Netlify's posts don't cover it, and walgit keeps

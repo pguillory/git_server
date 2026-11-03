@@ -1,20 +1,27 @@
 defmodule GitServer.CountingStore do
   @moduledoc """
-  A store that delegates to another and counts its reads: `get` and `get_file` calls.
+  A store that delegates to another and counts its reads (`get` and `get_file` calls)
+  and its deletes.
   """
   @behaviour GitServer.Store
   alias GitServer.Store
 
-  def wrap(store), do: {__MODULE__, %{inner: store, counts: :counters.new(2, [])}}
+  def wrap(store), do: {__MODULE__, %{inner: store, counts: :counters.new(3, [])}}
 
-  @doc "The reads so far: `%{gets: n, get_files: n}`."
-  def counts({__MODULE__, %{counts: counts}}),
-    do: %{gets: :counters.get(counts, 1), get_files: :counters.get(counts, 2)}
+  @doc "The calls so far: `%{gets: n, get_files: n, deletes: n}`."
+  def counts({__MODULE__, %{counts: counts}}) do
+    %{
+      gets: :counters.get(counts, 1),
+      get_files: :counters.get(counts, 2),
+      deletes: :counters.get(counts, 3),
+    }
+  end
 
   @doc "Sets the counts back to zero."
   def reset({__MODULE__, %{counts: counts}}) do
     :counters.put(counts, 1, 0)
     :counters.put(counts, 2, 0)
+    :counters.put(counts, 3, 0)
   end
 
   @impl true
@@ -37,7 +44,10 @@ defmodule GitServer.CountingStore do
     do: Store.put_file(config.inner, key, path, condition)
 
   @impl true
-  def delete(config, key), do: Store.delete(config.inner, key)
+  def delete(config, key) do
+    :counters.add(config.counts, 3, 1)
+    Store.delete(config.inner, key)
+  end
 
   @impl true
   def list(config, prefix), do: Store.list(config.inner, prefix)
