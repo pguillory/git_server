@@ -57,8 +57,8 @@ object, written with a conditional PUT, that decides what is visible. git_server
   arrive; git_server stores a push's pack as the client sent it.
 
 None of them deletes old packs safely. Tigris keeps everything, Enroute lists garbage
-collection as unfinished, Cursor's and Netlify's posts don't cover it, and walgit keeps retired packs
-forever by design, for downloads already in flight. A naive deletion races a client
+collection as unfinished, Cursor's and Netlify's posts don't cover it, and walgit keeps
+retired packs forever by design, for downloads already in flight. A naive deletion races a client
 that re-uploads identical bytes under the same content name just before its push
 publishes, so git_server deletes nothing until a design whose safety doesn't depend on
 time has been reviewed.
