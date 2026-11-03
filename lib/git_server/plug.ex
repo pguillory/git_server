@@ -34,7 +34,8 @@ defmodule GitServer.Plug do
   for credentials) or `:forbidden` (403). The Authorization header is dropped from
   the conn once checked, and credentials are never logged. If the function raises,
   throws, exits or returns anything else, the request is refused with HTTP 500 and
-  the log gets only the kind of failure and a stacktrace without arguments.
+  the log says only which: for a raise, throw or exit, its kind, an exception's
+  module and a stacktrace without arguments; for a return, not the value.
   """
 
   @behaviour Plug

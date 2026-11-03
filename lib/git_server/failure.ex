@@ -22,6 +22,9 @@ defmodule GitServer.Failure do
       {module, function, args, location} when is_list(args) ->
         {module, function, length(args), location}
 
+      {fun, args, location} when is_list(args) ->
+        {fun, length(args), location}
+
       entry ->
         entry
     end)

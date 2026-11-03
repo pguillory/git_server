@@ -33,6 +33,26 @@ defmodule GitServer.AuthorizeFailureTest do
       end)
 
     assert log =~ "the authorize function raised FunctionClauseError"
+    assert log =~ "test/git_server/authorize_failure_test.exs"
+    refute log =~ "someone-else"
+  end
+
+  test "an authorize that throws or exits logs no credentials and refuses the request" do
+    log =
+      ls_remote(fn
+        %{credentials: nil} -> :unauthorized
+        %{credentials: credentials} -> throw({:failed, credentials})
+      end)
+
+    assert log =~ "the authorize function threw"
+
+    log =
+      ls_remote(fn
+        %{credentials: nil} -> :unauthorized
+        %{credentials: credentials} -> exit({:failed, credentials})
+      end)
+
+    assert log =~ "the authorize function exited"
   end
 
   test "an authorize that returns something else logs no credentials and refuses" do

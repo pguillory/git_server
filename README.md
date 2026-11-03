@@ -128,8 +128,9 @@ It's called before any store access with a map:
 
 It returns `:ok`, `:unauthorized` (401 with a Basic challenge) or `:forbidden` (403). The
 library holds no secret and never logs credentials. If `authorize` raises, throws, exits
-or returns anything else, the request gets a 500 and the server log gets only the kind
-of failure and a stacktrace without arguments.
+or returns anything else, the request gets a 500 and the server log says only which:
+for a raise, throw or exit, its kind, an exception's module and a stacktrace without
+arguments; for a return, not the value.
 
 There is no create step. A repository with nothing in the bucket is an empty one, so
 `authorize` decides which names may exist. A name is one or more `/`-separated segments
