@@ -1,4 +1,6 @@
-defmodule GitServer.PlugTest do
+defmodule GitServer.ServingTest do
+  # The basics with the real git client: empty repositories, refs and HEAD,
+  # authorization, and config resolved per request.
   use ExUnit.Case, async: true
   import GitServer.TestGit
   alias GitServer.TestServer

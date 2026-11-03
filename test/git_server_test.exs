@@ -1,7 +1,8 @@
 defmodule GitServerTest do
   use ExUnit.Case, async: true
+  import GitServer
 
   test "version" do
-    assert GitServer.version() =~ ~r/^\d+\.\d+\.\d+/
+    assert version() =~ ~r/^\d+\.\d+\.\d+/
   end
 end

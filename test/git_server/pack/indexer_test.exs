@@ -1,5 +1,6 @@
 defmodule GitServer.Pack.IndexerTest do
   use ExUnit.Case, async: true
+  import GitServer.Pack.Indexer
 
   import GitServer.LocalGit
   import GitServer.PackBuilder
@@ -8,7 +9,6 @@ defmodule GitServer.Pack.IndexerTest do
   alias GitServer.Object
   alias GitServer.ObjectDB
   alias GitServer.ObjectId
-  alias GitServer.Pack.Indexer
   alias GitServer.Pack.Writer
 
   setup_all do
@@ -21,7 +21,7 @@ defmodule GitServer.Pack.IndexerTest do
   for name <- [:repacked, :ofs, :ref] do
     test "indexes the #{name} pack exactly as git does", %{fixture: f, objects: objects} do
       {pack_path, idx_path} = f.packs[unquote(name)]
-      {:ok, result} = Indexer.index(pack_path)
+      {:ok, result} = index(pack_path)
       assert result.idx == File.read!(idx_path)
 
       assert ObjectId.to_hex(result.checksum) =~
@@ -45,7 +45,7 @@ defmodule GitServer.Pack.IndexerTest do
       Writer.write(db, ids, [], fn piece, acc -> {:ok, [acc | piece]} end)
 
     path = write(f.home, "ours.pack", IO.iodata_to_binary(pieces))
-    {:ok, result} = Indexer.index(path)
+    {:ok, result} = index(path)
     git!(f.home, f.home, ["index-pack", "-o", Path.join(f.home, "ours.idx"), path])
     assert result.idx == File.read!(Path.join(f.home, "ours.idx"))
   end
@@ -53,29 +53,29 @@ defmodule GitServer.Pack.IndexerTest do
   test "limits", %{fixture: f} do
     {pack_path, _} = f.packs.repacked
     size = File.stat!(pack_path).size
-    assert {:ok, _} = Indexer.index(pack_path, max_pack_bytes: size)
-    assert Indexer.index(pack_path, max_pack_bytes: size - 1) == {:error, "pack too large"}
-    assert Indexer.index(pack_path, max_object_bytes: 100_000) == {:error, "object too large"}
-    assert Indexer.index(pack_path, max_objects: 10) == {:error, "too many objects"}
-    assert Indexer.index(pack_path, max_links: 10) == {:error, "too many links"}
+    assert {:ok, _} = index(pack_path, max_pack_bytes: size)
+    assert index(pack_path, max_pack_bytes: size - 1) == {:error, "pack too large"}
+    assert index(pack_path, max_object_bytes: 100_000) == {:error, "object too large"}
+    assert index(pack_path, max_objects: 10) == {:error, "too many objects"}
+    assert index(pack_path, max_links: 10) == {:error, "too many links"}
 
-    assert Indexer.index(pack_path, max_work_bytes: 1_000_000) ==
+    assert index(pack_path, max_work_bytes: 1_000_000) ==
              {:error, "pack needs too much work to index"}
 
-    assert Indexer.index(pack_path, max_delta_depth: 1) == {:error, "delta chain too deep"}
-    assert {:ok, _} = Indexer.index(pack_path, cache_bytes: 0)
-    assert {:ok, _} = Indexer.index(pack_path, max_work_bytes: nil, cache_bytes: 0)
+    assert index(pack_path, max_delta_depth: 1) == {:error, "delta chain too deep"}
+    assert {:ok, _} = index(pack_path, cache_bytes: 0)
+    assert {:ok, _} = index(pack_path, max_work_bytes: nil, cache_bytes: 0)
   end
 
   test "without links, checks them but neither keeps nor counts them", %{fixture: f} do
     {pack_path, idx_path} = f.packs.repacked
-    {:ok, result} = Indexer.index(pack_path, max_links: 1, links: false)
+    {:ok, result} = index(pack_path, max_links: 1, links: false)
     assert result.idx == File.read!(idx_path)
     assert Enum.all?(result.objects, fn {_id, {_type, links}} -> links == [] end)
 
     tree = object(:tree, "100644 f\0short")
     path = write(f.home, "bad-tree.pack", elem(build([tree]), 0))
-    assert {:error, "malformed tree " <> _} = Indexer.index(path, links: false)
+    assert {:error, "malformed tree " <> _} = index(path, links: false)
   end
 
   test "a bad trailer and a truncated pack", %{fixture: f} do
@@ -87,22 +87,22 @@ defmodule GitServer.Pack.IndexerTest do
         <<Bitwise.bxor(:binary.at(pack, 100), 1)>> <>
         binary_part(pack, 101, byte_size(pack) - 101)
 
-    assert Indexer.index(write(f.home, "flipped.pack", flipped)) ==
+    assert index(write(f.home, "flipped.pack", flipped)) ==
              {:error, "pack checksum mismatch"}
 
     cut = binary_part(pack, 0, byte_size(pack) - 1000)
-    assert Indexer.index(write(f.home, "cut.pack", cut)) == {:error, "pack checksum mismatch"}
-    assert Indexer.index(write(f.home, "tiny.pack", "PACK")) == {:error, "truncated pack"}
-    assert {:error, "cannot open pack: " <> _} = Indexer.index(Path.join(f.home, "missing.pack"))
+    assert index(write(f.home, "cut.pack", cut)) == {:error, "pack checksum mismatch"}
+    assert index(write(f.home, "tiny.pack", "PACK")) == {:error, "truncated pack"}
+    assert {:error, "cannot open pack: " <> _} = index(Path.join(f.home, "missing.pack"))
 
     # A valid checksum over objects that stop early, or over extra bytes.
     {short, _} = build([object(:blob, "one")], count: 2)
-    assert Indexer.index(write(f.home, "short.pack", short)) == {:error, "truncated pack"}
+    assert index(write(f.home, "short.pack", short)) == {:error, "truncated pack"}
     {long, _} = build([object(:blob, "one"), object(:blob, "two")], count: 1)
-    assert Indexer.index(write(f.home, "long.pack", long)) == {:error, "pack has trailing data"}
+    assert index(write(f.home, "long.pack", long)) == {:error, "pack has trailing data"}
     {not_pack, _} = build([])
 
-    assert Indexer.index(
+    assert index(
              write(
                f.home,
                "notpack.pack",
@@ -118,7 +118,7 @@ defmodule GitServer.Pack.IndexerTest do
         input: write(f.home, "revs", "HEAD\n^HEAD~2\n")
       )
 
-    assert Indexer.index(write(f.home, "thin.pack", thin)) == {:error, "thin pack not supported"}
+    assert index(write(f.home, "thin.pack", thin)) == {:error, "thin pack not supported"}
   end
 
   test "crafted deltas", %{fixture: f} do
@@ -128,13 +128,13 @@ defmodule GitServer.Pack.IndexerTest do
     {cycle, _} =
       build([ref_delta(a, b, insert_delta(1, "a")), ref_delta(b, a, insert_delta(1, "b"))])
 
-    assert Indexer.index(write(f.home, "cycle.pack", cycle)) ==
+    assert index(write(f.home, "cycle.pack", cycle)) ==
              {:error, "thin pack not supported"}
 
     big = varint(5) <> varint(2_000) <> <<0x90, 5>>
     {over, _} = build([object(:blob, "hello"), ofs_delta(a, 0, big)])
 
-    assert Indexer.index(write(f.home, "over.pack", over), max_object_bytes: 1_000) ==
+    assert index(write(f.home, "over.pack", over), max_object_bytes: 1_000) ==
              {:error, "object too large"}
 
     # A REF_DELTA whose base comes later in the pack, and a delta on that delta.
@@ -150,7 +150,7 @@ defmodule GitServer.Pack.IndexerTest do
         hello,
       ])
 
-    {:ok, result} = Indexer.index(write(f.home, "later.pack", later))
+    {:ok, result} = index(write(f.home, "later.pack", later))
 
     assert result.objects == %{
              hello.id => {:blob, []},
@@ -159,11 +159,11 @@ defmodule GitServer.Pack.IndexerTest do
            }
 
     {dup, _} = build([hello, hello])
-    assert {:error, "duplicate object " <> _} = Indexer.index(write(f.home, "dup.pack", dup))
+    assert {:error, "duplicate object " <> _} = index(write(f.home, "dup.pack", dup))
 
     bad_tree = object(:tree, "100644 name\0short")
     {bad, _} = build([bad_tree])
-    assert {:error, "malformed tree " <> _} = Indexer.index(write(f.home, "bad.pack", bad))
+    assert {:error, "malformed tree " <> _} = index(write(f.home, "bad.pack", bad))
   end
 
   test "a REF_DELTA waits for a base that is itself a later delta", %{fixture: f} do
@@ -174,7 +174,7 @@ defmodule GitServer.Pack.IndexerTest do
     entries = [ref_delta(c, b, insert_delta(11, "brand new")), ref_delta(b, a.id, copy), a]
     assert_indexes(f, entries)
     {pack, _} = build(entries)
-    {:ok, result} = Indexer.index(write(f.home, "waits.pack", pack))
+    {:ok, result} = index(write(f.home, "waits.pack", pack))
     assert result.objects == %{a.id => {:blob, []}, b => {:blob, []}, c => {:blob, []}}
   end
 
@@ -185,13 +185,13 @@ defmodule GitServer.Pack.IndexerTest do
     tag = "object #{String.duplicate("a", 40)}\ntype commit\ntag v\n"
     {pack, _} = build([object(:tree, entry <> entry), object(:tag, tag)])
     path = write(dir, "links.pack", pack)
-    assert {:ok, _} = Indexer.index(path, max_links: 3)
-    assert Indexer.index(path, max_links: 2) == {:error, "too many links"}
+    assert {:ok, _} = index(path, max_links: 3)
+    assert index(path, max_links: 2) == {:error, "too many links"}
   end
 
   test "an empty pack", %{fixture: f} do
     {empty, _} = build([])
-    {:ok, result} = Indexer.index(write(f.home, "empty.pack", empty))
+    {:ok, result} = index(write(f.home, "empty.pack", empty))
     assert result.objects == %{}
   end
 
@@ -243,7 +243,7 @@ defmodule GitServer.Pack.IndexerTest do
       padded = self_adler_with(:binary.copy(target, 40), target)
       assert :erlang.adler32(padded) == :binary.decode_unsigned(target)
       {pack, _} = build([object(:blob, padded, level: 0)])
-      assert Indexer.index(write(f.home, "false-ends.pack", pack)) == {:error, "corrupt object"}
+      assert index(write(f.home, "false-ends.pack", pack)) == {:error, "corrupt object"}
       assert_indexes(f, [object(:blob, content, level: 0)])
     end
 
@@ -262,25 +262,25 @@ defmodule GitServer.Pack.IndexerTest do
       data = IO.iodata_to_binary(:zlib.deflate(z, "hello", :finish))
       :zlib.close(z)
       {pack, _} = build([%{object(:blob, "hello") | data: data}])
-      assert Indexer.index(write(f.home, "dict.pack", pack)) == {:error, "corrupt object"}
+      assert index(write(f.home, "dict.pack", pack)) == {:error, "corrupt object"}
       {pack, _} = build([%{object(:blob, "hello") | data: "not zlib at all"}])
-      assert Indexer.index(write(f.home, "notzlib.pack", pack)) == {:error, "corrupt object"}
+      assert index(write(f.home, "notzlib.pack", pack)) == {:error, "corrupt object"}
     end
 
     test "an incomplete stream", %{fixture: f} do
       whole = object(:blob, String.duplicate("abc", 1000))
       cut = %{whole | data: binary_part(whole.data, 0, byte_size(whole.data) - 6)}
       {pack, _} = build([cut, object(:blob, "after")])
-      assert {:error, _} = Indexer.index(write(f.home, "incomplete.pack", pack))
+      assert {:error, _} = index(write(f.home, "incomplete.pack", pack))
       {pack, _} = build([cut])
-      assert {:error, _} = Indexer.index(write(f.home, "incomplete2.pack", pack))
+      assert {:error, _} = index(write(f.home, "incomplete2.pack", pack))
     end
 
     test "a declared size that doesn't match the stream", %{fixture: f} do
       {pack, _} = build([%{object(:blob, "hello") | size: 3}])
-      assert Indexer.index(write(f.home, "size.pack", pack)) == {:error, "object size mismatch"}
+      assert index(write(f.home, "size.pack", pack)) == {:error, "object size mismatch"}
       {pack, _} = build([%{object(:blob, "hello") | size: 7}, object(:blob, "after")])
-      assert {:error, _} = Indexer.index(write(f.home, "size2.pack", pack))
+      assert {:error, _} = index(write(f.home, "size2.pack", pack))
     end
   end
 
@@ -322,7 +322,7 @@ defmodule GitServer.Pack.IndexerTest do
   defp assert_indexes(f, entries) do
     {pack, idx_entries} = build(entries)
     path = write(f.home, "case-#{System.unique_integer([:positive])}.pack", pack)
-    {:ok, result} = Indexer.index(path)
+    {:ok, result} = index(path)
 
     assert Map.keys(result.objects) |> Enum.sort() ==
              Enum.map(idx_entries, &elem(&1, 0)) |> Enum.sort()

@@ -1,4 +1,4 @@
-defmodule GitServer.ReceivePackTest do
+defmodule GitServer.GitPushTest do
   # Pushes with the real git client.
   use ExUnit.Case, async: true
   import GitServer.TestGit

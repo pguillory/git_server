@@ -1,12 +1,12 @@
 defmodule GitServer.PackCacheTest do
   use ExUnit.Case, async: true
+  import GitServer.PackCache
   import Bitwise
   import GitServer.TestGit
   alias GitServer.CountingStore
   alias GitServer.ObjectDB
   alias GitServer.Object
   alias GitServer.PackBuilder
-  alias GitServer.PackCache
   alias GitServer.Repository
   alias GitServer.State
   alias GitServer.Store
@@ -116,11 +116,11 @@ defmodule GitServer.PackCacheTest do
 
     # A request holding every entry, then a cap that leaves room for three.
     {:ok, holding} = Repository.snapshot(store, "r", tmp_dir, cache: {cache_dir, 1_000_000})
-    {:ok, cache} = PackCache.open(cache_dir, 3 * entry + div(entry, 2), store)
-    PackCache.evict(cache)
+    {:ok, cache} = open(cache_dir, 3 * entry + div(entry, 2), store)
+    evict(cache)
     assert length(cache_files(cache_dir)) == 6
-    {:ok, cache} = PackCache.open(cache_dir, 0, store)
-    PackCache.evict(cache)
+    {:ok, cache} = open(cache_dir, 0, store)
+    evict(cache)
     assert cache_files(cache_dir) == []
     read_all!(holding, blobs)
     Repository.release(holding)
@@ -135,7 +135,7 @@ defmodule GitServer.PackCacheTest do
     cache_dir = Path.join(tmp_dir, "cache")
     {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir, cache: {cache_dir, 1_000_000})
     Repository.release(snapshot)
-    {:ok, cache} = PackCache.open(cache_dir, 1_000_000, store)
+    {:ok, cache} = open(cache_dir, 1_000_000, store)
 
     # Entry i was last used i + 2 hours ago, so the last two are the oldest.
     now = System.os_time(:second)
@@ -148,7 +148,7 @@ defmodule GitServer.PackCacheTest do
     oldest = List.last(names)
     target = Path.join(tmp_dir, "taken")
 
-    assert PackCache.take(
+    assert take(
              cache,
              Repository.pack_key("r", oldest),
              target <> ".pack",
@@ -158,8 +158,8 @@ defmodule GitServer.PackCacheTest do
     size =
       for(f <- cache_files(cache_dir), do: File.stat!(Path.join(cache_dir, f)).size) |> Enum.sum()
 
-    {:ok, small} = PackCache.open(cache_dir, div(size, 2) + 1, store)
-    PackCache.evict(small)
+    {:ok, small} = open(cache_dir, div(size, 2) + 1, store)
+    evict(small)
 
     [first, _second, _third, last] = hashes
 
@@ -176,12 +176,12 @@ defmodule GitServer.PackCacheTest do
     cache_dir = Path.join(tmp_dir, "cache")
     {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir, cache: {cache_dir, 1_000_000})
     Repository.release(snapshot)
-    {:ok, cache} = PackCache.open(cache_dir, 1_000_000, store)
+    {:ok, cache} = open(cache_dir, 1_000_000, store)
     File.rm!(Path.join(cache_dir, hash(cache_dir, store, name) <> ".pack"))
 
     target = Path.join(tmp_dir, "taken")
 
-    assert PackCache.take(
+    assert take(
              cache,
              Repository.pack_key("r", name),
              target <> ".pack",

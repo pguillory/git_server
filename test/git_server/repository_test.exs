@@ -1,7 +1,7 @@
 defmodule GitServer.RepositoryTest do
   use ExUnit.Case, async: true
+  import GitServer.Repository
   import Bitwise
-  alias GitServer.Repository
   alias GitServer.State
   alias GitServer.Store
 
@@ -65,21 +65,21 @@ defmodule GitServer.RepositoryTest do
 
   test "state reads and conditional writes" do
     store = GitServer.TestStore.fresh()
-    assert Repository.read_state(store, "r") == {:ok, State.new(), :absent}
+    assert read_state(store, "r") == {:ok, State.new(), :absent}
 
     state = %State{refs: %{"refs/heads/main" => @a}}
-    assert {:ok, e1} = Repository.put_state(store, "r", state, :absent)
-    assert Repository.put_state(store, "r", state, :absent) == {:error, :precondition_failed}
-    assert Repository.read_state(store, "r") == {:ok, state, e1}
-    assert {:ok, e2} = Repository.put_state(store, "r", %{state | packs: [@a]}, e1)
-    assert Repository.put_state(store, "r", state, e1) == {:error, :precondition_failed}
-    assert {:ok, %State{packs: [@a]}, ^e2} = Repository.read_state(store, "r")
+    assert {:ok, e1} = put_state(store, "r", state, :absent)
+    assert put_state(store, "r", state, :absent) == {:error, :precondition_failed}
+    assert read_state(store, "r") == {:ok, state, e1}
+    assert {:ok, e2} = put_state(store, "r", %{state | packs: [@a]}, e1)
+    assert put_state(store, "r", state, e1) == {:error, :precondition_failed}
+    assert {:ok, %State{packs: [@a]}, ^e2} = read_state(store, "r")
     assert {:ok, [%{key: "r.git/state"}]} = Store.list(store, "")
 
-    {:ok, _} = Store.put(store, Repository.state_key("bad"), "garbage", :none)
+    {:ok, _} = Store.put(store, state_key("bad"), "garbage", :none)
 
     assert {:error, "repository bad: not a git_server state object"} =
-             Repository.read_state(store, "bad")
+             read_state(store, "bad")
   end
 
   @tag :tmp_dir
@@ -88,37 +88,37 @@ defmodule GitServer.RepositoryTest do
   } do
     store = GitServer.TestStore.fresh()
 
-    assert {:ok, empty} = Repository.snapshot(store, "r", tmp_dir)
+    assert {:ok, empty} = snapshot(store, "r", tmp_dir)
     assert {empty.etag, empty.packs, File.ls!(empty.dir)} == {:absent, [], []}
-    Repository.release(empty)
+    release(empty)
     assert File.ls!(tmp_dir) == []
 
     for name <- [@a, @b] do
-      {:ok, _} = Store.put(store, Repository.pack_key("r", name), "pack #{name}", :none)
-      {:ok, _} = Store.put(store, Repository.idx_key("r", name), "idx #{name}", :none)
+      {:ok, _} = Store.put(store, pack_key("r", name), "pack #{name}", :none)
+      {:ok, _} = Store.put(store, idx_key("r", name), "idx #{name}", :none)
     end
 
-    {:ok, e1} = Repository.put_state(store, "r", %State{packs: [@a]}, :absent)
-    assert {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir)
+    {:ok, e1} = put_state(store, "r", %State{packs: [@a]}, :absent)
+    assert {:ok, snapshot} = snapshot(store, "r", tmp_dir)
     assert snapshot.etag == e1
     assert (File.stat!(snapshot.dir).mode &&& 0o777) == 0o700
     assert [{pack, idx}] = snapshot.packs
     assert {File.read!(pack), File.read!(idx)} == {"pack #{@a}", "idx #{@a}"}
 
-    {:ok, e2} = Repository.put_state(store, "r", %State{packs: [@a, @b]}, e1)
-    assert {:ok, refreshed} = Repository.refresh(snapshot)
+    {:ok, e2} = put_state(store, "r", %State{packs: [@a, @b]}, e1)
+    assert {:ok, refreshed} = refresh(snapshot)
     assert refreshed.etag == e2
     assert [{^pack, ^idx}, {pack_b, _}] = refreshed.packs
     assert File.read!(pack_b) == "pack #{@b}"
 
-    assert Repository.release(refreshed) == :ok
+    assert release(refreshed) == :ok
     assert File.ls!(tmp_dir) == []
   end
 
   defp put_packs!(store, names) do
     for name <- names do
-      {:ok, _} = Store.put(store, Repository.pack_key("r", name), "pack #{name}", :none)
-      {:ok, _} = Store.put(store, Repository.idx_key("r", name), "idx #{name}", :none)
+      {:ok, _} = Store.put(store, pack_key("r", name), "pack #{name}", :none)
+      {:ok, _} = Store.put(store, idx_key("r", name), "idx #{name}", :none)
     end
   end
 
@@ -139,10 +139,10 @@ defmodule GitServer.RepositoryTest do
     inner = GitServer.TestStore.fresh()
     names = names(6)
     put_packs!(inner, names)
-    {:ok, _} = Repository.put_state(inner, "r", %State{packs: names}, :absent)
+    {:ok, _} = put_state(inner, "r", %State{packs: names}, :absent)
     store = GateStore.wrap(inner, self())
 
-    task = Task.async(fn -> Repository.snapshot(store, "r", tmp_dir, concurrency: 3) end)
+    task = Task.async(fn -> snapshot(store, "r", tmp_dir, concurrency: 3) end)
 
     held = for _ <- 1..3, do: assert_receive({:held, _, _}, 10_000)
     refute_receive {:held, _, _}, 100
@@ -159,24 +159,24 @@ defmodule GitServer.RepositoryTest do
 
     {:ok, snapshot} = Task.await(task)
     assert read_packs(snapshot) == contents(names)
-    Repository.release(snapshot)
+    release(snapshot)
   end
 
   @tag :tmp_dir
   test "a missing pack fails the snapshot and leaves nothing behind", %{tmp_dir: tmp_dir} do
     store = GitServer.TestStore.fresh()
-    {:ok, _} = Repository.put_state(store, "r", %State{packs: [@a]}, :absent)
+    {:ok, _} = put_state(store, "r", %State{packs: [@a]}, :absent)
 
-    assert Repository.snapshot(store, "r", tmp_dir) ==
+    assert snapshot(store, "r", tmp_dir) ==
              {:error, "repository r: pack #{@a} is missing"}
 
     assert File.ls!(tmp_dir) == []
 
-    assert Repository.with_snapshot(store, "empty", tmp_dir, fn snapshot -> snapshot.etag end) ==
+    assert with_snapshot(store, "empty", tmp_dir, fn snapshot -> snapshot.etag end) ==
              :absent
 
     assert_raise RuntimeError, fn ->
-      Repository.with_snapshot(store, "empty", tmp_dir, fn _ -> raise "boom" end)
+      with_snapshot(store, "empty", tmp_dir, fn _ -> raise "boom" end)
     end
 
     assert File.ls!(tmp_dir) == []
@@ -186,13 +186,13 @@ defmodule GitServer.RepositoryTest do
   test "update writes against the fresh state after a lost race, stops, or gives up at the deadline",
        %{tmp_dir: tmp_dir} do
     inner = GitServer.TestStore.fresh()
-    {:ok, e1} = Repository.put_state(inner, "r", %State{refs: %{"refs/heads/a" => @a}}, :absent)
+    {:ok, e1} = put_state(inner, "r", %State{refs: %{"refs/heads/a" => @a}}, :absent)
 
     # Another writer wins the race just before the first conditional write.
     store =
       GitServer.RacingStore.wrap(inner, fn ->
         {:ok, _} =
-          Repository.put_state(inner, "r", %State{refs: %{"refs/heads/b" => @b}}, e1)
+          put_state(inner, "r", %State{refs: %{"refs/heads/b" => @b}}, e1)
       end)
 
     deadline = System.monotonic_time(:millisecond) + 10_000
@@ -202,24 +202,24 @@ defmodule GitServer.RepositoryTest do
       {:write, %{snapshot.state | refs: refs}, [map_size(snapshot.state.refs) | last || []]}
     end
 
-    {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir)
+    {:ok, snapshot} = snapshot(store, "r", tmp_dir)
     # The second call saw the first's result and the other writer's ref.
-    assert Repository.update(snapshot, deadline, add_c) == {:ok, [1, 1]}
+    assert update(snapshot, deadline, add_c) == {:ok, [1, 1]}
 
     assert {:ok, %State{refs: %{"refs/heads/b" => @b, "refs/heads/c" => @a} = refs}, _} =
-             Repository.read_state(inner, "r")
+             read_state(inner, "r")
 
     assert map_size(refs) == 2
-    Repository.release(snapshot)
+    release(snapshot)
 
-    {:ok, snapshot} = Repository.snapshot(inner, "r", tmp_dir)
-    assert Repository.update(snapshot, deadline, fn _, nil -> {:stop, :no} end) == {:stop, :no}
+    {:ok, snapshot} = snapshot(inner, "r", tmp_dir)
+    assert update(snapshot, deadline, fn _, nil -> {:stop, :no} end) == {:stop, :no}
 
     # A stale snapshot past its deadline loses once and gives up.
-    {:ok, _} = Repository.put_state(inner, "r", State.new(), snapshot.etag)
+    {:ok, _} = put_state(inner, "r", State.new(), snapshot.etag)
     past = System.monotonic_time(:millisecond)
     write = fn snapshot, _last -> {:write, snapshot.state, :tried} end
-    assert Repository.update(snapshot, past, write) == {:error, :deadline, :tried}
-    Repository.release(snapshot)
+    assert update(snapshot, past, write) == {:error, :deadline, :tried}
+    release(snapshot)
   end
 end

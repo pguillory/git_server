@@ -1,4 +1,4 @@
-defmodule GitServer.ReceivePackRequestTest do
+defmodule GitServer.PushRequestTest do
   # Push requests built by hand, for what real git checks before it sends: stale and
   # atomic commands, duplicates, malformed packs. Packs come from `git pack-objects`
   # or `GitServer.PackBuilder`.

@@ -1,11 +1,11 @@
 defmodule GitServer.ObjectDBTest do
   use ExUnit.Case, async: true
+  import GitServer.ObjectDB
 
   import GitServer.LocalGit
 
   alias GitServer.GitFixture
   alias GitServer.Object
-  alias GitServer.ObjectDB
   alias GitServer.ObjectId
   alias GitServer.Pack
   alias GitServer.PackBuilder
@@ -22,17 +22,17 @@ defmodule GitServer.ObjectDBTest do
 
   for name <- [:repacked, :ofs, :ref] do
     test "reads every object of the #{name} pack as git does", %{fixture: f, objects: objects} do
-      {:ok, db} = ObjectDB.open([f.packs[unquote(name)]])
+      {:ok, db} = open([f.packs[unquote(name)]])
 
       for {hex, type, content} <- objects do
         {:ok, id} = ObjectId.from_hex(hex)
-        assert ObjectDB.read(db, id) == {:ok, type, content}
-        assert ObjectDB.lookup(db, id) == {:ok, type, byte_size(content)}
+        assert read(db, id) == {:ok, type, content}
+        assert lookup(db, id) == {:ok, type, byte_size(content)}
       end
 
-      assert ObjectDB.read(db, ObjectId.zero()) == :error
-      assert ObjectDB.lookup(db, ObjectId.zero()) == :error
-      ObjectDB.close(db)
+      assert read(db, ObjectId.zero()) == :error
+      assert lookup(db, ObjectId.zero()) == :error
+      close(db)
     end
   end
 
@@ -60,10 +60,10 @@ defmodule GitServer.ObjectDBTest do
   end
 
   test "reads across several packs", %{fixture: f, objects: objects} do
-    {:ok, db} = ObjectDB.open([f.packs.ref, f.packs.ofs])
+    {:ok, db} = open([f.packs.ref, f.packs.ofs])
 
     for {hex, type, content} <- objects do
-      assert ObjectDB.read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
+      assert read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
     end
   end
 
@@ -80,27 +80,27 @@ defmodule GitServer.ObjectDBTest do
         {pack_path, idx_path}
       end
 
-    {:ok, db} = ObjectDB.open(packs, max_open_files: 3)
+    {:ok, db} = open(packs, max_open_files: 3)
     assert Files.open_count(db.files) <= 3
 
     for _round <- 1..2, content <- Enum.shuffle(blobs) do
-      assert ObjectDB.read(db, Object.id(:blob, content)) == {:ok, :blob, content}
+      assert read(db, Object.id(:blob, content)) == {:ok, :blob, content}
       assert Files.open_count(db.files) <= 3
     end
 
-    ObjectDB.close(db)
+    close(db)
   end
 
   test "follows deltas through a pack reopened for the read", %{fixture: f, objects: objects} do
     # Each order puts a different pack first, where every read lands.
     for packs <- [[:ref, :ofs, :repacked], [:ofs, :repacked, :ref], [:repacked, :ref, :ofs]] do
-      {:ok, db} = ObjectDB.open(Enum.map(packs, &f.packs[&1]), max_open_files: 1)
+      {:ok, db} = open(Enum.map(packs, &f.packs[&1]), max_open_files: 1)
 
       for {hex, type, content} <- Enum.shuffle(objects) do
-        assert ObjectDB.read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
+        assert read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
       end
 
-      ObjectDB.close(db)
+      close(db)
     end
   end
 
@@ -109,31 +109,31 @@ defmodule GitServer.ObjectDBTest do
     objects: objects,
   } do
     for cache_bytes <- [0, 5_000, 300_000] do
-      {:ok, db} = ObjectDB.open([f.packs.repacked], cache_bytes: cache_bytes)
+      {:ok, db} = open([f.packs.repacked], cache_bytes: cache_bytes)
 
       for {hex, type, content} <- Enum.shuffle(objects) do
-        assert ObjectDB.read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
+        assert read(db, elem(ObjectId.from_hex(hex), 1)) == {:ok, type, content}
       end
     end
   end
 
   test "follows only as many deltas as allowed", %{fixture: f, objects: objects} do
-    {:ok, db} = ObjectDB.open([f.packs.repacked], max_delta_depth: 0)
-    results = for {hex, _, _} <- objects, do: ObjectDB.read(db, elem(ObjectId.from_hex(hex), 1))
+    {:ok, db} = open([f.packs.repacked], max_delta_depth: 0)
+    results = for {hex, _, _} <- objects, do: read(db, elem(ObjectId.from_hex(hex), 1))
     assert {:error, "delta chain too deep"} in results
   end
 
   test "refuses objects over the size cap", %{fixture: f} do
-    {:ok, db} = ObjectDB.open([f.packs.repacked], max_object_bytes: 1000)
+    {:ok, db} = open([f.packs.repacked], max_object_bytes: 1000)
     {:ok, id} = ObjectId.from_hex(rev_parse(f, "HEAD:big.txt"))
-    assert ObjectDB.read(db, id) == {:error, "object too large"}
-    assert ObjectDB.lookup(db, id) == {:error, "object too large"}
+    assert read(db, id) == {:error, "object too large"}
+    assert lookup(db, id) == {:error, "object too large"}
   end
 
   test "an idx must belong to its pack", %{fixture: f} do
     {ofs_pack, _} = f.packs.ofs
     {_, ref_idx} = f.packs.ref
-    assert ObjectDB.open([{ofs_pack, ref_idx}]) == {:error, "pack index doesn't match pack"}
+    assert open([{ofs_pack, ref_idx}]) == {:error, "pack index doesn't match pack"}
 
     corrupt = Path.join(f.home, "corrupt.idx")
     idx = File.read!(ref_idx)
@@ -143,8 +143,8 @@ defmodule GitServer.ObjectDBTest do
       binary_part(idx, 0, 2000) <> "x" <> binary_part(idx, 2001, byte_size(idx) - 2001)
     )
 
-    assert ObjectDB.open([{ofs_pack, corrupt}]) == {:error, "pack index checksum mismatch"}
-    assert {:error, "cannot read pack index: " <> _} = ObjectDB.open([{ofs_pack, corrupt <> "x"}])
+    assert open([{ofs_pack, corrupt}]) == {:error, "pack index checksum mismatch"}
+    assert {:error, "cannot read pack index: " <> _} = open([{ofs_pack, corrupt <> "x"}])
   end
 
   test "idx encoding is byte-identical to git's", %{fixture: f} do
@@ -183,7 +183,7 @@ defmodule GitServer.ObjectDBTest do
 
   test "parses links as git sees them", %{fixture: f, objects: objects} do
     for {hex, type, content} <- objects do
-      {:ok, links} = ObjectDB.parse_links(type, content)
+      {:ok, links} = parse_links(type, content)
       assert Enum.sort(links) == Enum.sort(expected_links(f, hex, type, content))
     end
   end
@@ -263,7 +263,7 @@ defmodule GitServer.ObjectDBTest do
     fixture: f,
     objects: objects,
   } do
-    {:ok, db} = ObjectDB.open([f.packs.ofs])
+    {:ok, db} = open([f.packs.ofs])
     ids = for {hex, _, _} <- objects, do: elem(ObjectId.from_hex(hex), 1)
     {:ok, checksum, pieces} = Writer.write(db, ids, [], fn piece, acc -> {:ok, [acc | piece]} end)
     pack = IO.iodata_to_binary(pieces)
@@ -282,7 +282,7 @@ defmodule GitServer.ObjectDBTest do
   end
 
   test "the writer reports a missing object", %{fixture: f} do
-    {:ok, db} = ObjectDB.open([f.packs.ofs])
+    {:ok, db} = open([f.packs.ofs])
     missing = ObjectId.zero()
 
     assert {:error, "missing object " <> _, _acc} =

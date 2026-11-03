@@ -1,5 +1,6 @@
 defmodule GitServer.StateTest do
   use ExUnit.Case, async: true
+  import GitServer.State
   alias GitServer.State
 
   @a String.duplicate("a", 40)
@@ -12,7 +13,7 @@ defmodule GitServer.StateTest do
       refs: %{"refs/tags/v1" => @a, "refs/heads/x" => @b},
     }
 
-    assert State.encode(state) == """
+    assert encode(state) == """
            git_server state 1
            head refs/heads/master
            pack #{@b}
@@ -21,9 +22,9 @@ defmodule GitServer.StateTest do
            ref #{@a} refs/tags/v1
            """
 
-    assert State.decode(State.encode(state)) == {:ok, state}
+    assert decode(encode(state)) == {:ok, state}
 
-    assert State.decode(State.encode(State.new())) ==
+    assert decode(encode(new())) ==
              {:ok, %State{head: "refs/heads/main", packs: [], refs: %{}}}
   end
 
@@ -43,7 +44,7 @@ defmodule GitServer.StateTest do
           "git_server state 1\nhead refs/heads/main\nref #{@a}\n",
           "git_server state 1\nhead refs/heads/main\nextra\n",
         ] do
-      assert {:error, _} = State.decode(text), inspect(text)
+      assert {:error, _} = decode(text), inspect(text)
     end
   end
 end

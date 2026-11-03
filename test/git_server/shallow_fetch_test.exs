@@ -1,4 +1,4 @@
-defmodule GitServer.ShallowTest do
+defmodule GitServer.ShallowFetchTest do
   # Shallow fetches, with real git as the oracle: each command runs against the server
   # and against a file:// copy of the same history, and the two clones must agree on
   # `.git/shallow` and on every commit they hold. Requests git never sends go through

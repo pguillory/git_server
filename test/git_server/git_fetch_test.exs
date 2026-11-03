@@ -1,4 +1,4 @@
-defmodule GitServer.UploadPackTest do
+defmodule GitServer.GitFetchTest do
   # Repositories seeded in the store with packs real git wrote, read with the real git
   # client. Requests that client never sends go through Plug.Test.
   use ExUnit.Case, async: true

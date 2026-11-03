@@ -3,6 +3,7 @@ defmodule GitServer.CompactionTest do
   # keeps every object and deletes nothing, and every race with pushes, force pushes,
   # fetches and other compactions, each ending with the repository whole.
   use ExUnit.Case, async: true
+  import GitServer.Compaction
 
   import Bitwise
   import GitServer.TestGit
@@ -148,27 +149,27 @@ defmodule GitServer.CompactionTest do
     end
 
     test "nothing at or under max_packs, and never a single pack" do
-      assert Compaction.choose(sizes([1, 1, 1]), max_packs: 3) == []
-      assert Compaction.choose(sizes([1, 1, 1]), max_packs: 2) == ["p0", "p1", "p2"]
+      assert choose(sizes([1, 1, 1]), max_packs: 3) == []
+      assert choose(sizes([1, 1, 1]), max_packs: 2) == ["p0", "p1", "p2"]
       # Already a progression: each at least twice the one below.
-      assert Compaction.choose(sizes([1, 2, 4, 8, 16]), max_packs: 0) == []
-      assert Compaction.choose(sizes([100]), max_packs: 0) == []
+      assert choose(sizes([1, 2, 4, 8, 16]), max_packs: 0) == []
+      assert choose(sizes([100]), max_packs: 0) == []
     end
 
     test "the smallest packs roll up until each left is twice the next smaller" do
       # 1, 1 break the progression; 2 < 2 * (1 + 1) joins; 8 >= 2 * 4 stays.
-      assert Compaction.choose(sizes([8, 1, 1, 2, 32]), max_packs: 0) == ["p1", "p2", "p3"]
+      assert choose(sizes([8, 1, 1, 2, 32]), max_packs: 0) == ["p1", "p2", "p3"]
       # Equal packs all merge.
-      assert Compaction.choose(sizes([5, 5, 5, 5]), max_packs: 0) == ["p0", "p1", "p2", "p3"]
+      assert choose(sizes([5, 5, 5, 5]), max_packs: 0) == ["p0", "p1", "p2", "p3"]
     end
 
     test "the largest drop out while over the byte or object cap" do
-      chosen = Compaction.choose(sizes([5, 5, 5, 5]), max_packs: 0, max_compact_bytes: 12)
+      chosen = choose(sizes([5, 5, 5, 5]), max_packs: 0, max_compact_bytes: 12)
       assert chosen == ["p0", "p1"]
 
       counted = [{"a", 5, 10}, {"b", 5, 10}, {"c", 5, 10}]
-      assert Compaction.choose(counted, max_packs: 0, max_compact_objects: 20) == ["a", "b"]
-      assert Compaction.choose(counted, max_packs: 0, max_compact_objects: 19) == []
+      assert choose(counted, max_packs: 0, max_compact_objects: 20) == ["a", "b"]
+      assert choose(counted, max_packs: 0, max_compact_objects: 19) == []
     end
   end
 
@@ -179,30 +180,30 @@ defmodule GitServer.CompactionTest do
 
     test "replaces the inputs at the first one's place and keeps refs and head" do
       state = state_with(~w(a b c d))
-      assert {:write, new, 3} = Compaction.replace(state, ~w(b d), "m")
+      assert {:write, new, 3} = replace(state, ~w(b d), "m")
       assert new == %{state | packs: ~w(a m c)}
     end
 
     test "stops if any input is gone: another compaction got there" do
-      assert Compaction.replace(state_with(~w(a m c)), ~w(b d), "n") == {:stop, :superseded}
-      assert Compaction.replace(state_with(~w(a c d)), ~w(b d), "n") == {:stop, :superseded}
+      assert replace(state_with(~w(a m c)), ~w(b d), "n") == {:stop, :superseded}
+      assert replace(state_with(~w(a c d)), ~w(b d), "n") == {:stop, :superseded}
     end
 
     test "disjoint compactions both apply" do
-      {:write, first, _} = Compaction.replace(state_with(~w(a b c d)), ~w(a b), "m")
-      assert {:write, second, 2} = Compaction.replace(first, ~w(c d), "n")
+      {:write, first, _} = replace(state_with(~w(a b c d)), ~w(a b), "m")
+      assert {:write, second, 2} = replace(first, ~w(c d), "n")
       assert second.packs == ~w(m n)
     end
 
     test "lists the output once when it is an input or already listed" do
       assert {:write, %{packs: ~w(a c)}, 2} =
-               Compaction.replace(state_with(~w(a b c)), ~w(a b), "a")
+               replace(state_with(~w(a b c)), ~w(a b), "a")
 
       assert {:write, %{packs: ~w(b c)}, 2} =
-               Compaction.replace(state_with(~w(a b c)), ~w(a b), "b")
+               replace(state_with(~w(a b c)), ~w(a b), "b")
 
       assert {:write, %{packs: ~w(c m)}, 2} =
-               Compaction.replace(state_with(~w(a b c m)), ~w(a b), "m")
+               replace(state_with(~w(a b c m)), ~w(a b), "m")
     end
   end
 

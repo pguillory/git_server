@@ -2,6 +2,7 @@ defmodule GitServer.Pack.MergeTest do
   # Merging local packs: what is copied, rewritten or written whole, checked with
   # git's own verify-pack.
   use ExUnit.Case, async: true
+  import GitServer.Pack.Merge
 
   import Bitwise
   import GitServer.LocalGit
@@ -13,7 +14,6 @@ defmodule GitServer.Pack.MergeTest do
   alias GitServer.Pack
   alias GitServer.Pack.Idx
   alias GitServer.Pack.Indexer
-  alias GitServer.Pack.Merge
 
   setup_all do
     home = tmp_dir!("merge")
@@ -67,7 +67,7 @@ defmodule GitServer.Pack.MergeTest do
        %{fixture: f} do
     out = Path.join(f.home, "merged-git.pack")
     inputs = [f.packs.ofs, f.packs.ref, f.packs.repacked]
-    {:ok, checksum, ids} = Merge.write(inputs, out)
+    {:ok, checksum, ids} = write(inputs, out)
 
     {:ok, idx} = Idx.decode(File.read!(elem(f.packs.ofs, 1)))
     assert ids == MapSet.new(Idx.entries(idx), &elem(&1, 0))
@@ -98,7 +98,7 @@ defmodule GitServer.Pack.MergeTest do
       ])
 
     out = Path.join(dir, "merged.pack")
-    {:ok, _checksum, ids} = Merge.write([a, b], out)
+    {:ok, _checksum, ids} = write([a, b], out)
     assert ids == MapSet.new([id(x), id(y), id(z), id(v), id(u)])
     {:ok, indexed} = Indexer.index(out)
     assert MapSet.new(Map.keys(indexed.objects)) == ids
@@ -132,7 +132,7 @@ defmodule GitServer.Pack.MergeTest do
     first = pack_files!(dir, "first", [Enum.at(filler, 0)])
     second = pack_files!(dir, "second", entries)
     out = Path.join(dir, "merged.pack")
-    {:ok, _checksum, ids} = Merge.write([first, second], out)
+    {:ok, _checksum, ids} = write([first, second], out)
     {:ok, indexed} = Indexer.index(out)
     assert MapSet.new(Map.keys(indexed.objects)) == ids
     deltas = bases(dir, out)
@@ -158,7 +158,7 @@ defmodule GitServer.Pack.MergeTest do
       ])
 
     out = Path.join(dir, "merged.pack")
-    {:ok, _checksum, ids} = Merge.write([first, second], out)
+    {:ok, _checksum, ids} = write([first, second], out)
     {:ok, indexed} = Indexer.index(out)
     assert MapSet.new(Map.keys(indexed.objects)) == ids
     assert bases(dir, out)[ObjectId.to_hex(id(base <> "!"))] == ObjectId.to_hex(id(base))
@@ -180,7 +180,7 @@ defmodule GitServer.Pack.MergeTest do
       ])
 
     out = Path.join(dir, "merged.pack")
-    {:ok, _checksum, ids} = Merge.write([first, second], out)
+    {:ok, _checksum, ids} = write([first, second], out)
     {:ok, indexed} = Indexer.index(out)
     assert MapSet.new(Map.keys(indexed.objects)) == ids
     deltas = bases(dir, out)
@@ -205,19 +205,19 @@ defmodule GitServer.Pack.MergeTest do
     out = Path.join(f.home, "capped.pack")
     {pack_path, _} = f.packs.repacked
     size = File.stat!(pack_path).size
-    assert {:ok, _, _} = Merge.write([f.packs.repacked], out, [], size)
-    assert Merge.write([f.packs.repacked], out, [], size - 1) == {:error, {:too_large, 0}}
+    assert {:ok, _, _} = write([f.packs.repacked], out, [], size)
+    assert write([f.packs.repacked], out, [], size - 1) == {:error, {:too_large, 0}}
   end
 
   test "a missing or corrupt input fails" do
     dir = tmp_dir!("merge-bad")
     {pack_path, idx_path} = pack_files!(dir, "a", [blob("one"), blob("two")])
     out = Path.join(dir, "merged.pack")
-    assert {:error, "cannot read pack index: " <> _} = Merge.write([{pack_path, "nope"}], out)
+    assert {:error, "cannot read pack index: " <> _} = write([{pack_path, "nope"}], out)
 
     # An idx whose offsets don't match the pack.
     File.write!(idx_path, Idx.encode([{id("one"), 12, 0}, {id("two"), 13, 0}], <<0::160>>))
-    assert {:error, "pack index doesn't match pack"} = Merge.write([{pack_path, idx_path}], out)
+    assert {:error, "pack index doesn't match pack"} = write([{pack_path, idx_path}], out)
     File.rm_rf!(dir)
   end
 end
