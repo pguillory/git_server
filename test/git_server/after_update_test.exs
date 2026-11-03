@@ -1,7 +1,6 @@
 defmodule GitServer.AfterUpdateTest do
   # The host's after_update function, with the real git client.
   use ExUnit.Case, async: true
-  import ExUnit.CaptureLog
   import GitServer.TestGit
   alias GitServer.TestServer
 
@@ -71,7 +70,7 @@ defmodule GitServer.AfterUpdateTest do
     commit!(local, "a", "a\n")
     declining = observing(store: store, before_update: fn _ -> {:reject, "no"} end)
 
-    push_and_wait(declining, fn ->
+    TestServer.await_post(declining, fn ->
       {_, 1} = git(["push", TestServer.url(declining, "r"), "main"], cd: local)
     end)
 
@@ -81,65 +80,11 @@ defmodule GitServer.AfterUpdateTest do
     {_, 0} = git(["tag", "-a", "v1", "-m", "v1"], cd: local)
     server = observing(store: store)
 
-    push_and_wait(server, fn ->
+    TestServer.await_post(server, fn ->
       {output, 1} = git(["push", TestServer.url(server, "r"), "v1:refs/heads/v1"], cd: local)
       assert output =~ "(not a commit)"
     end)
 
     refute_received {:landed, _, _, _}
-  end
-
-  # The function runs after the report is sent, so git can finish before it does. Runs
-  # `fun` and waits for every push request to `server` to end.
-  defp push_and_wait(server, fun) do
-    test = self()
-    port = URI.parse(server.url).port
-    id = make_ref()
-
-    :telemetry.attach(
-      id,
-      [:bandit, :request, :stop],
-      &__MODULE__.request_stopped/4,
-      {test, port, id}
-    )
-
-    try do
-      fun.()
-      assert_receive {:request_done, ^id}, 5_000
-    after
-      :telemetry.detach(id)
-    end
-  end
-
-  @doc false
-  def request_stopped(_event, _measurements, metadata, {test, port, id}) do
-    case metadata do
-      %{conn: %{port: ^port, method: "POST"}} -> send(test, {:request_done, id})
-      _ -> :ok
-    end
-  end
-
-  test "a failing one is logged by kind and doesn't affect the push", %{tmp_dir: tmp_dir} do
-    secret = "content-4d1e-distinctive"
-
-    server =
-      TestServer.start!(
-        after_update: fn push -> raise "webhook failed for #{secret} #{inspect(push)}" end
-      )
-
-    local = init!(Path.join(tmp_dir, "local"))
-    head = commit!(local, "a", secret)
-
-    log =
-      capture_log(fn ->
-        push_and_wait(server, fn ->
-          {output, 0} = git(["push", TestServer.url(server, "r"), "main"], cd: local)
-          assert output =~ "* [new branch]      main -> main"
-        end)
-      end)
-
-    assert log =~ "the after_update function raised RuntimeError"
-    refute log =~ secret
-    refute log =~ head
   end
 end

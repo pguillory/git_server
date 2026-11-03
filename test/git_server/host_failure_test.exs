@@ -1,10 +1,38 @@
-defmodule GitServer.AuthorizeFailureTest do
-  use ExUnit.Case, async: true
+defmodule GitServer.HostFailureTest do
+  # A host function (config, authorize, before_update, after_update) that raises,
+  # throws, exits or returns something else: the request is refused (or, for
+  # after_update, goes on), and the failure is logged by kind with nothing it carried,
+  # since the host's functions see credentials, options and pushed content. Includes
+  # the README's "When something goes wrong" rows for these failures.
+  #
+  # Not async: each test captures the log, which must hold only its own lines.
+  use ExUnit.Case, async: false
   import ExUnit.CaptureLog
   import GitServer.TestGit
+  alias GitServer.Repository
   alias GitServer.TestServer
 
+  @moduletag :tmp_dir
+
   @password "pw-7f3a9c-distinctive"
+
+  defp init!(dir) do
+    {_, 0} = git(["init", "-q", "-b", "main", dir])
+    dir
+  end
+
+  defp commit!(dir, file, content) do
+    File.write!(Path.join(dir, file), content)
+    {_, 0} = git(["add", "-A"], cd: dir)
+    {_, 0} = git(["commit", "-q", "-m", "change"], cd: dir)
+    {id, 0} = git(["rev-parse", "HEAD"], cd: dir)
+    String.trim(id)
+  end
+
+  defp refs(server, repo) do
+    {:ok, state, _etag} = Repository.read_state(server.store, repo)
+    state.refs
+  end
 
   # Git sends credentials only after a 401, so each authorize answers that first.
   defp ls_remote(authorize) do
@@ -33,7 +61,7 @@ defmodule GitServer.AuthorizeFailureTest do
       end)
 
     assert log =~ "the authorize function raised FunctionClauseError"
-    assert log =~ "test/git_server/authorize_failure_test.exs"
+    assert log =~ "test/git_server/host_failure_test.exs"
     refute log =~ "someone-else"
   end
 
@@ -101,5 +129,74 @@ defmodule GitServer.AuthorizeFailureTest do
       assert log =~ expected
       refute log =~ @password
     end
+  end
+
+  test "a config function that fails is a server error", %{tmp_dir: tmp_dir} do
+    server = TestServer.start!(config: fn -> raise "broken host config" end)
+
+    log =
+      capture_log(fn ->
+        {output, 128} = git(["clone", "-q", server.url <> "/repo", Path.join(tmp_dir, "c")])
+        assert output =~ "remote: Server error\n"
+        assert output =~ "The requested URL returned error: 500"
+      end)
+
+    assert log =~ "the config function raised RuntimeError"
+  end
+
+  test "a before_update that fails refuses the push and logs no content", %{tmp_dir: tmp_dir} do
+    checks = [
+      fn _ -> raise "secret content" end,
+      fn _ -> throw("secret content") end,
+      fn _ -> exit("secret content") end,
+      fn _ -> {:reject, :not_a_string} end,
+      fn _ ->
+        spawn_link(fn -> exit("secret content") end)
+        Process.sleep(:infinity)
+      end,
+    ]
+
+    local = init!(Path.join(tmp_dir, "local"))
+    commit!(local, "README", "hello\n")
+    check = fn push -> Enum.at(checks, String.to_integer(push.repo)).(push) end
+    server = TestServer.start!(before_update: check)
+
+    for i <- 0..(length(checks) - 1) do
+      log =
+        capture_log(fn ->
+          {output, 1} = git(["push", TestServer.url(server, "#{i}"), "main"], cd: local)
+          assert output =~ ~r/remote: The server could not check this push.\s*\n/
+          assert output =~ " ! [remote rejected] main -> main (push check failed)\n"
+        end)
+
+      assert log =~ "the before_update function"
+      refute log =~ "secret"
+      assert refs(server, "#{i}") == %{}
+    end
+  end
+
+  test "an after_update that fails is logged by kind and doesn't affect the push",
+       %{tmp_dir: tmp_dir} do
+    secret = "content-4d1e-distinctive"
+
+    server =
+      TestServer.start!(
+        after_update: fn push -> raise "webhook failed for #{secret} #{inspect(push)}" end
+      )
+
+    local = init!(Path.join(tmp_dir, "local"))
+    head = commit!(local, "a", secret)
+
+    log =
+      capture_log(fn ->
+        TestServer.await_post(server, fn ->
+          {output, 0} = git(["push", TestServer.url(server, "r"), "main"], cd: local)
+          assert output =~ "* [new branch]      main -> main"
+        end)
+      end)
+
+    assert log =~ "the after_update function raised RuntimeError"
+    refute log =~ secret
+    refute log =~ head
   end
 end

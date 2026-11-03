@@ -5,7 +5,6 @@ defmodule GitServer.CompactionTest do
   use ExUnit.Case, async: true
 
   import Bitwise
-  import ExUnit.CaptureLog
   import GitServer.TestGit
 
   alias GitServer.Compaction
@@ -381,50 +380,15 @@ defmodule GitServer.CompactionTest do
     compact = fn -> GitServer.compact(opts(store, tmp_dir), @repo, options) end
 
     # b overflows: what came before it merges.
-    log = capture_log(fn -> assert {:ok, %{merged: 4, packs: 3}} = compact.() end)
-    refute log =~ "compaction"
+    assert {:ok, %{merged: 4, packs: 3}} = compact.()
     assert [_merged, ^b, ^c] = state(store).packs
 
     # Again b overflows, second of three: the others merge without it.
-    log = capture_log(fn -> assert {:ok, %{merged: 2, packs: 2}} = compact.() end)
-    refute log =~ "compaction"
+    assert {:ok, %{merged: 2, packs: 2}} = compact.()
     assert [_merged, ^b] = state(store).packs
     Invariant.check!(store, @repo, tmp_dir)
 
     assert compact.() == {:ok, :unchanged}
-
-    # Just a and b: no two packs merge within the cap.
-    put_built!(store, [PackBuilder.object(:blob, x)], "two")
-    put_built!(store, [PackBuilder.object(:blob, x) | deltas], "two")
-    list_packs!(store, [a, b], "two")
-
-    log =
-      capture_log(fn ->
-        assert GitServer.compact(opts(store, tmp_dir), "two", options) ==
-                 {:error, "compaction stopped: no two packs merge within :max_compact_bytes"}
-      end)
-
-    assert log =~ "repository two: compaction stopped"
-  end
-
-  test "an input whose idx doesn't match its objects fails and publishes nothing",
-       %{tmp_dir: tmp_dir} do
-    store = GitServer.TestStore.fresh()
-    good = put_built!(store, [PackBuilder.object(:blob, "good")])
-    lying = %{PackBuilder.object(:blob, "real") | id: Object.id(:blob, "claimed")}
-    bad = put_built!(store, [lying])
-    list_packs!(store, [good, bad])
-
-    log =
-      capture_log(fn ->
-        assert {:error, "compaction failed: " <> _} =
-                 GitServer.compact(opts(store, tmp_dir), @repo, max_packs: 0)
-      end)
-
-    assert log =~ "repository #{@repo}: compaction failed"
-    assert state(store).packs == [good, bad]
-    {:ok, keys} = Store.list(store, "#{@repo}.git/packs/")
-    assert length(keys) == 4
   end
 
   test "options and names are checked", %{tmp_dir: tmp_dir} do

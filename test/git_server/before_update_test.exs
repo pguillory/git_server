@@ -1,7 +1,6 @@
 defmodule GitServer.BeforeUpdateTest do
   # The host's push check, with the real git client.
   use ExUnit.Case, async: true
-  import ExUnit.CaptureLog
   import GitServer.TestGit
   alias GitServer.Push
   alias GitServer.Repository
@@ -184,36 +183,6 @@ defmodule GitServer.BeforeUpdateTest do
 
   defp only({:ok, files}, path) do
     {:ok, Enum.filter(files, &(&1.path == path))}
-  end
-
-  test "failing checks refuse the push and log no content", %{tmp_dir: tmp_dir} do
-    checks = [
-      fn _ -> raise "secret content" end,
-      fn _ -> throw("secret content") end,
-      fn _ -> exit("secret content") end,
-      fn _ -> {:reject, :not_a_string} end,
-      fn _ ->
-        spawn_link(fn -> exit("secret content") end)
-        Process.sleep(:infinity)
-      end,
-    ]
-
-    local = init!(Path.join(tmp_dir, "local"))
-    commit!(local, "README", "hello\n")
-    server = start!(fn push -> Enum.at(checks, String.to_integer(push.repo)).(push) end)
-
-    for i <- 0..(length(checks) - 1) do
-      log =
-        capture_log(fn ->
-          {output, 1} = git(["push", TestServer.url(server, "#{i}"), "main"], cd: local)
-          assert output =~ "remote: The server could not check this push."
-          assert output =~ "(push check failed)"
-        end)
-
-      assert log =~ "the before_update function"
-      refute log =~ "secret"
-      assert state(server, "#{i}").refs == %{}
-    end
   end
 
   test "a multi-ref push is seen whole and refused whole", %{tmp_dir: tmp_dir} do

@@ -1,13 +1,12 @@
 defmodule GitServer.ErrorsTest do
   # What the real git client prints for each failure in the README's "When something
   # goes wrong" table. Each assertion is a line git prints, so a change here is a
-  # change to that table.
+  # change to that table. The rows for failures the server also logs are checked in
+  # host_failure_test.exs and storage_failure_test.exs, which capture the log.
   use ExUnit.Case, async: true
-  import ExUnit.CaptureLog
   import GitServer.TestGit
   alias GitServer.RacingStore
   alias GitServer.Repository
-  alias GitServer.Store
   alias GitServer.TestServer
 
   @moduletag :tmp_dir
@@ -79,54 +78,6 @@ defmodule GitServer.ErrorsTest do
 
     assert output =~
              "remote: git_server needs Git protocol version 2 to fetch (git 2.26 or later, protocol.version=2)\n"
-  end
-
-  test "a host callback that fails is a server error", %{tmp_dir: tmp_dir} do
-    server = TestServer.start!(config: fn -> raise "broken host config" end)
-
-    log =
-      capture_log(fn ->
-        {output, 128} = clone(server, tmp_dir, url: server.url <> "/repo")
-        assert output =~ "remote: Server error\n"
-        assert output =~ "The requested URL returned error: 500"
-      end)
-
-    assert log =~ "the config function raised RuntimeError"
-  end
-
-  test "storage failures, at each step", %{tmp_dir: tmp_dir} do
-    server = TestServer.start!()
-    local = pushed!(server, tmp_dir)
-    commit!(local, "b", "b\n")
-
-    # A store whose credentials the bucket refuses fails every call.
-    {module, config} = server.store
-    refused = TestServer.start!(store: {module, %{config | secret_access_key: "wrong"}})
-    {:ok, %{packs: [pack]}, _etag} = Repository.read_state(server.store, "repo")
-
-    log =
-      capture_log(fn ->
-        # The push's ref advertisement, git's first request.
-        {output, 128} = push(refused, local)
-        assert output =~ "remote: the server's storage failed; try again later\n"
-        assert output =~ "The requested URL returned error: 500"
-
-        # ls-refs.
-        {output, 128} = clone(refused, tmp_dir)
-        assert output =~ "fatal: remote error: the server's storage failed; try again later\n"
-
-        # A pack the state lists is gone from the bucket: the fetch, and the push's
-        # download of the repository's packs.
-        :ok = Store.delete(server.store, Repository.pack_key("repo", pack))
-        {output, 128} = clone(server, tmp_dir)
-        assert output =~ "fatal: remote error: the server's storage failed; try again later\n"
-        {output, 1} = push(server, local)
-        assert output =~ " ! [remote rejected] main -> main (storage failed, try again later)\n"
-      end)
-
-    assert log =~ "store error: "
-    assert log =~ "pack #{pack} is missing"
-    refute log =~ "error] ** "
   end
 
   test "push limits", %{tmp_dir: tmp_dir} do
@@ -257,7 +208,7 @@ defmodule GitServer.ErrorsTest do
              " ! [remote rejected] main -> main (failed to update ref, too many pushes at once)\n"
   end
 
-  test "a push the host's check refuses, or can't run", %{tmp_dir: tmp_dir} do
+  test "a push the host's check refuses", %{tmp_dir: tmp_dir} do
     server = TestServer.start!()
     local = pushed!(server, tmp_dir)
     commit!(local, "b", "b\n")
@@ -267,17 +218,6 @@ defmodule GitServer.ErrorsTest do
     {output, 1} = push(refusing, local)
     assert output =~ ~r/remote: config.toml: unknown key\s*\n/
     assert output =~ " ! [remote rejected] main -> main (declined)\n"
-
-    failing = TestServer.start!(store: server.store, before_update: fn _push -> raise "bug" end)
-
-    log =
-      capture_log(fn ->
-        {output, 1} = push(failing, local)
-        assert output =~ ~r/remote: The server could not check this push.\s*\n/
-        assert output =~ " ! [remote rejected] main -> main (push check failed)\n"
-      end)
-
-    assert log =~ "the before_update function raised RuntimeError"
   end
 
   test "a fetch of an object no ref reaches", %{tmp_dir: tmp_dir} do

@@ -1,7 +1,6 @@
 defmodule GitServer.ReceivePackTest do
   # Pushes with the real git client.
   use ExUnit.Case, async: true
-  import ExUnit.CaptureLog
   import GitServer.TestGit
   alias GitServer.Repository
   alias GitServer.Store
@@ -99,7 +98,7 @@ defmodule GitServer.ReceivePackTest do
     assert {_, 0} = git(["fsck", "--full"], cd: clone)
   end
 
-  test "max_objects limits a push, max_delta_depth a push and a stored pack", %{
+  test "max_objects limits a push, max_delta_depth a push", %{
     tmp_dir: tmp_dir,
   } do
     server = TestServer.start!()
@@ -118,18 +117,9 @@ defmodule GitServer.ReceivePackTest do
     assert output =~ "error: remote unpack failed: delta chain too deep (limit 0)\n"
     {_, 0} = git(["push", TestServer.url(server, "big"), "main"], cd: local)
 
-    # A stored pack is read whatever its object count, but not past the delta depth.
+    # A stored pack is read whatever its object count (and, past the delta depth, not:
+    # storage_failure_test.exs).
     {_, 0} = git(["clone", "-q", TestServer.url(few_objects, "big"), Path.join(tmp_dir, "a")])
-
-    log =
-      capture_log(fn ->
-        {output, 128} =
-          git(["clone", "-q", TestServer.url(no_deltas, "big"), Path.join(tmp_dir, "b")])
-
-        assert output =~ "delta chain too deep"
-      end)
-
-    assert log =~ ~r/repository big: pack [0-9a-f]{40}\.pack: delta chain too deep/
   end
 
   test "tags, an annotated tag and a branch delete", %{tmp_dir: tmp_dir} do

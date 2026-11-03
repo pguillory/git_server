@@ -1,6 +1,5 @@
 defmodule GitServer.PackCacheTest do
   use ExUnit.Case, async: true
-  import ExUnit.CaptureLog
   import Bitwise
   import GitServer.TestGit
   alias GitServer.CountingStore
@@ -70,36 +69,6 @@ defmodule GitServer.PackCacheTest do
     {_, 0} = git(["push", "-q", TestServer.url(cached, "r"), "main"], cd: local)
     assert CountingStore.counts(store).get_files == 0
     assert (File.stat!(cache_dir).mode &&& 0o777) == 0o700
-  end
-
-  test "a pack corrupted in the store is refused and not cached", %{tmp_dir: tmp_dir} do
-    store = GitServer.TestStore.fresh()
-    cache_dir = Path.join(tmp_dir, "cache")
-    server = TestServer.start!(store: store, pack_cache_dir: cache_dir)
-    local = Path.join(tmp_dir, "local")
-    {_, 0} = git(["init", "-q", "-b", "main", local])
-    commit!(local, "f", "one\n")
-    {_, 0} = git(["push", "-q", TestServer.url(server, "r"), "main"], cd: local)
-
-    {:ok, %State{packs: [name]}, _} = Repository.read_state(store, "r")
-    key = Repository.pack_key("r", name)
-    {:ok, pack, _} = Store.get(store, key)
-    # One byte changed in the middle: the trailer no longer matches.
-    middle = div(byte_size(pack), 2)
-    <<head::binary-size(middle), byte, rest::binary>> = pack
-    {:ok, _} = Store.put(store, key, <<head::binary, Bitwise.bxor(byte, 1), rest::binary>>, :none)
-
-    log =
-      capture_log(fn ->
-        {output, status} =
-          git(["clone", "-q", TestServer.url(server, "r"), Path.join(tmp_dir, "c")])
-
-        assert status != 0
-        assert output =~ "storage"
-      end)
-
-    assert log =~ "pack #{name}: pack checksum mismatch"
-    assert cache_files(cache_dir) == []
   end
 
   # Packs of one blob each, stored under `repo` and listed in its state.
@@ -284,24 +253,6 @@ defmodule GitServer.PackCacheTest do
     read_all!(snapshot, blobs)
     Repository.release(snapshot)
     assert length(cache_files(Path.join(tmp_dir, "cache"))) == 2
-  end
-
-  test "a cache directory that can't be made is logged and the request goes on", %{
-    tmp_dir: tmp_dir,
-  } do
-    store = GitServer.TestStore.fresh()
-    blobs = seed_packs!(store, "r", 2)
-    not_a_dir = Path.join(tmp_dir, "file")
-    File.write!(not_a_dir, "")
-
-    log =
-      capture_log(fn ->
-        {:ok, snapshot} = Repository.snapshot(store, "r", tmp_dir, cache: {not_a_dir, 1_000_000})
-        read_all!(snapshot, blobs)
-        Repository.release(snapshot)
-      end)
-
-    assert log =~ "cannot use the pack cache #{not_a_dir}"
   end
 
   test "the cache directory may not take a request directory's name" do

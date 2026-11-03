@@ -4,6 +4,7 @@ defmodule GitServer.TestServer do
   git client.
   """
 
+  import ExUnit.Assertions, only: [assert_receive: 2]
   import ExUnit.Callbacks, only: [start_supervised!: 1]
 
   @user "user"
@@ -36,6 +37,38 @@ defmodule GitServer.TestServer do
   @doc "A repository URL with credentials (`user`/`secret` unless given)."
   def url(server, repo, user \\ @user, password \\ @password) do
     String.replace(server.url, "http://", "http://#{user}:#{password}@") <> "/" <> repo
+  end
+
+  @doc """
+  Runs `fun` and waits for a POST request to `server` to end. A push's report is sent
+  before the host's `after_update` runs, so git can finish first.
+  """
+  def await_post(server, fun) do
+    test = self()
+    port = URI.parse(server.url).port
+    id = make_ref()
+
+    :telemetry.attach(
+      id,
+      [:bandit, :request, :stop],
+      &__MODULE__.request_stopped/4,
+      {test, port, id}
+    )
+
+    try do
+      fun.()
+      assert_receive {:request_done, ^id}, 5_000
+    after
+      :telemetry.detach(id)
+    end
+  end
+
+  @doc false
+  def request_stopped(_event, _measurements, metadata, {test, port, id}) do
+    case metadata do
+      %{conn: %{port: ^port, method: "POST"}} -> send(test, {:request_done, id})
+      _ -> :ok
+    end
   end
 
   defp authorize(%{credentials: {@user, @password}}) do
